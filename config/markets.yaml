@@ -1,0 +1,87 @@
+# Market configuration: tracked symbols and data sources
+
+# A-share market (via AKShare)
+ashare:
+  exchange: "SSE/SZSE"
+  data_source: "akshare"
+  currency: "CNY"
+  timezone: "Asia/Shanghai"
+  tracked_stocks:
+    - symbol: "600519"  # 贵州茅台
+      name: "Kweichow Moutai"
+      sector: "白酒"
+    - symbol: "000858"  # 五粮液
+      name: "Wuliangye"
+      sector: "白酒"
+    - symbol: "300750"  # 宁德时代
+      name: "CATL"
+      sector: "新能源"
+    - symbol: "002594"  # 比亚迪
+      name: "BYD"
+      sector: "新能源汽车"
+    - symbol: "600036"  # 招商银行
+      name: "CMB"
+      sector: "银行"
+    - symbol: "601318"  # 中国平安
+      name: "Ping An"
+      sector: "保险"
+    - symbol: "000333"  # 美的集团
+      name: "Midea"
+      sector: "家电"
+    - symbol: "300059"  # 东方财富
+      name: "East Money"
+      sector: "互联网金融"
+
+# US market (via yfinance)
+us:
+  exchange: "NYSE/NASDAQ"
+  data_source: "yfinance"
+  currency: "USD"
+  timezone: "America/New_York"
+  tracked_stocks:
+    - symbol: "AAPL"
+      name: "Apple Inc."
+      sector: "Technology"
+    - symbol: "MSFT"
+      name: "Microsoft"
+      sector: "Technology"
+    - symbol: "NVDA"
+      name: "NVIDIA"
+      sector: "Semiconductors"
+    - symbol: "GOOGL"
+      name: "Alphabet"
+      sector: "Technology"
+    - symbol: "AMZN"
+      name: "Amazon"
+      sector: "E-commerce"
+    - symbol: "TSLA"
+      name: "Tesla"
+      sector: "EV"
+    - symbol: "META"
+      name: "Meta"
+      sector: "Social Media"
+    - symbol: "BRK-B"
+      name: "Berkshire Hathaway"
+      sector: "Conglomerate"
+
+# HK market (via AKShare) - Phase 2
+hk:
+  exchange: "HKEX"
+  data_source: "akshare"
+  currency: "HKD"
+  timezone: "Asia/Hong_Kong"
+  tracked_stocks:
+    - symbol: "00700"  # 腾讯
+      name: "Tencent"
+      sector: "互联网"
+
+# Crypto (via CCXT) - Phase 2
+crypto:
+  exchange: "Global"
+  data_source: "ccxt"
+  currency: "USD"
+  tracked_coins:
+    - symbol: "BTC/USDT"
+      name: "Bitcoin"
+    - symbol: "ETH/USDT"
+      name: "Ethereum"

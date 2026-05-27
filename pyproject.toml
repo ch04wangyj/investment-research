@@ -1,0 +1,62 @@
+[project]
+name = "investment-research"
+version = "0.1.0"
+description = "Personal AI Investment Research System - Phase 1"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Core AI/Agent
+    "langgraph>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "langchain-community>=0.3.0",
+    # Data sources (Phase 1)
+    "akshare>=1.16.0",
+    "yfinance>=0.2.50",
+    # Storage (Phase 1)
+    "sqlalchemy>=2.0.0",
+    # Dashboard
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "streamlit>=1.40.0",
+    "plotly>=5.24.0",
+    # Config & validation
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "pyyaml>=6.0.0",
+    # HTTP & async
+    "httpx>=0.28.0",
+    # Utilities
+    "loguru>=0.7.0",
+    "pandas>=2.2.0",
+    "numpy>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "curl-cffi>=0.7.0",
+    "duckduckgo-search>=7.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "ipykernel>=6.29.0",
+    "jupyter>=1.1.0",
+    "ruff>=0.8.0",
+]
+phase2 = [
+    # Phase 2 data sources
+    "ccxt>=4.4.0",
+    "edgartools>=5.0.0",
+    # Phase 2 storage
+    "duckdb>=1.0.0",
+    "chromadb>=0.6.0",
+    "alembic>=1.14.0",
+    # Phase 2 scheduling
+    "apscheduler>=3.10.0",
+]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = false
