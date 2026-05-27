@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from config.settings import get_settings
 from src.agents.research.graph import run_research_pipeline
 from src.core.llm import provider_catalog
-from src.data.dal import get_dal, normalize_symbol
+from src.data.dal import detect_market, get_dal, normalize_symbol
 from src.data.indices import fetch_all_indices
 from src.data.news_fetcher import fetch_financial_news
 from src.research.schemas import ResearchRequest
@@ -42,6 +42,13 @@ class SymbolCreate(BaseModel):
     name: str | None = None
     exchange: str | None = None
     sector: str = ""
+
+
+class AssistantRequest(BaseModel):
+    provider_id: str | None = None
+    use_llm: bool = False
+    period: str = "6mo"
+    question: str = ""
 
 
 def _db_path() -> str:
@@ -106,6 +113,8 @@ def market_overview() -> dict[str, Any]:
         "news": news,
         "watchlist": [serialize_symbol(item) for item in symbols],
         "quotes": quotes,
+        "sectors": build_sector_summary(symbols, quotes),
+        "ratings": build_rating_summary(),
     }
 
 
@@ -187,6 +196,55 @@ def run_research(symbol: str, request: ResearchRequest | None = None) -> dict[st
     return {"report": content}
 
 
+@app.post("/api/assistant/{symbol}")
+def assistant_analysis(symbol: str, request: AssistantRequest | None = None) -> dict[str, Any]:
+    request = request or AssistantRequest()
+    normalized = normalize_symbol(symbol)
+    latest = _report_repo().get_latest(normalized, limit=1)
+    if latest:
+        content = latest[0].content or {}
+    else:
+        report = run_research_pipeline(
+            normalized,
+            period=request.period,
+            provider_id=request.provider_id,
+            use_llm=request.use_llm,
+        )
+        content = report.model_dump(mode="json")
+        _report_repo().save({
+            "agent_name": "AgentAssistant",
+            "run_id": report.run_id,
+            "ticker": report.symbol,
+            "report_type": "assistant_research",
+            "content": content,
+            "trigger_type": "assistant",
+        })
+
+    info = content.get("information_summary", {}) or {}
+    strategy = content.get("trading_strategy", {}) or {}
+    rating = content.get("rating", "HOLD")
+    response = [
+        f"信息收集员：{info.get('summary') or '已完成基础行情、历史价格和可得基本面扫描。'}",
+        "非结构观察：" + "；".join((info.get("unstructured_notes") or [])[:3]),
+        (
+            f"交易策略员：当前评级 {rating}，策略动作 {strategy.get('action', 'hold')}，"
+            f"建议仓位 {strategy.get('position_size_pct', 0)}%，入场区间 {strategy.get('entry_zone', '-')}"
+        ),
+        (
+            f"风险边界：止损 {strategy.get('stop_loss', '-')}，"
+            f"止盈 {strategy.get('take_profit', '-')}。"
+        ),
+    ]
+    if request.question:
+        response.append(f"针对你的问题：{request.question}。以上判断优先基于当前结构化报告，不构成投资建议。")
+    return {
+        "symbol": normalized,
+        "market": detect_market(normalized),
+        "messages": [item for item in response if item and not item.endswith("：")],
+        "report": content,
+    }
+
+
 def serialize_symbol(item) -> dict[str, Any]:
     return {
         "id": item.id,
@@ -226,6 +284,64 @@ def serialize_report_summary(row) -> dict[str, Any]:
         "report_type": row.report_type,
         "trigger_type": row.trigger_type,
         "company_name": content.get("company_name"),
+    }
+
+
+def build_sector_summary(symbols, quotes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    quote_map = {str(item.get("symbol")): item for item in quotes if item.get("symbol")}
+    groups: dict[str, dict[str, Any]] = {}
+    for item in symbols:
+        sector = item.sector or "未分类"
+        group = groups.setdefault(sector, {
+            "sector": sector,
+            "count": 0,
+            "symbols": [],
+            "avg_change_pct": None,
+            "positive": 0,
+            "negative": 0,
+        })
+        group["count"] += 1
+        quote = quote_map.get(item.symbol, {})
+        change = quote.get("change_pct")
+        group["symbols"].append({
+            "symbol": item.symbol,
+            "name": item.name,
+            "exchange": item.exchange,
+            "change_pct": change,
+        })
+        if isinstance(change, (int, float)):
+            group.setdefault("_changes", []).append(float(change))
+            if change >= 0:
+                group["positive"] += 1
+            else:
+                group["negative"] += 1
+    for group in groups.values():
+        changes = group.pop("_changes", [])
+        if changes:
+            group["avg_change_pct"] = round(sum(changes) / len(changes), 2)
+    return sorted(groups.values(), key=lambda value: (-value["count"], value["sector"]))
+
+
+def build_rating_summary() -> dict[str, Any]:
+    rows = _report_repo().list_recent(limit=200)
+    latest_by_symbol: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.ticker in latest_by_symbol:
+            continue
+        content = row.content or {}
+        latest_by_symbol[row.ticker] = {
+            "symbol": row.ticker,
+            "company_name": content.get("company_name"),
+            "rating": content.get("rating", "HOLD"),
+            "confidence": content.get("confidence", "low"),
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+    buckets = {"BUY": [], "HOLD": [], "SELL": []}
+    for item in latest_by_symbol.values():
+        buckets.setdefault(item["rating"], []).append(item)
+    return {
+        "buckets": buckets,
+        "counts": {key: len(value) for key, value in buckets.items()},
     }
 
 

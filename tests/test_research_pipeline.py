@@ -52,3 +52,6 @@ def test_research_pipeline_returns_typed_report(monkeypatch):
     assert report.symbol == "AAPL"
     assert report.rating in {"BUY", "HOLD", "SELL"}
     assert report.valuation.score >= 0
+    assert report.information_summary.structured_facts
+    assert report.trading_strategy is not None
+    assert report.trading_strategy.action in {"accumulate", "hold", "reduce", "avoid"}

@@ -5,16 +5,22 @@ import {
   Activity,
   AlertCircle,
   BarChart3,
+  Bot,
   Brain,
   CheckCircle2,
+  ClipboardList,
   Database,
   FileText,
   Gauge,
+  Layers3,
   Loader2,
+  MessageSquareText,
   RefreshCw,
   Search,
   Settings2,
   Sparkles,
+  Target,
+  TrendingUp,
 } from "lucide-react";
 
 import { PriceChart } from "@/components/price-chart";
@@ -28,7 +34,18 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { apiGet, apiPost, API_BASE, type Provider, type Quote, type ResearchReport, type SymbolItem, type SymbolProfile } from "@/lib/api";
+import {
+  apiGet,
+  apiPost,
+  API_BASE,
+  type Provider,
+  type Quote,
+  type RatingSummary,
+  type ResearchReport,
+  type SectorSummary,
+  type SymbolItem,
+  type SymbolProfile,
+} from "@/lib/api";
 
 type Health = {
   status: string;
@@ -42,6 +59,8 @@ type Overview = {
   news: Array<Record<string, unknown>>;
   watchlist: SymbolItem[];
   quotes: Quote[];
+  sectors?: SectorSummary[];
+  ratings?: RatingSummary;
 };
 
 type RunSummary = {
@@ -70,10 +89,15 @@ export function Workbench() {
   const [period, setPeriod] = useState("6mo");
   const [providerId, setProviderId] = useState("deepseek");
   const [useLlm, setUseLlm] = useState(false);
+  const [stockSearch, setStockSearch] = useState("");
+  const [sectorFilter, setSectorFilter] = useState("all");
+  const [ratingFilter, setRatingFilter] = useState("all");
+  const [assistantMessages, setAssistantMessages] = useState<string[]>([]);
   const [report, setReport] = useState<ResearchReport | null>(null);
   const [profile, setProfile] = useState<SymbolProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
+  const [assistantLoading, setAssistantLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
@@ -115,9 +139,10 @@ export function Workbench() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  async function runResearch() {
-    const clean = symbol.trim().toUpperCase();
+  async function runResearch(targetSymbol?: string) {
+    const clean = (targetSymbol || symbol).trim().toUpperCase();
     if (!clean) return;
+    setSymbol(clean);
     setAnalyzing(true);
     setError(null);
     try {
@@ -140,10 +165,62 @@ export function Workbench() {
     }
   }
 
+  async function selectSymbol(nextSymbol: string, loadProfile = true) {
+    const clean = nextSymbol.trim().toUpperCase();
+    setSymbol(clean);
+    setReport(null);
+    setAssistantMessages([]);
+    if (!loadProfile) return;
+    const nextProfile = await apiGet<SymbolProfile>(`/api/symbols/${clean}?period=${period}`).catch(() => null);
+    setProfile(nextProfile);
+  }
+
+  async function runAssistant(question = "") {
+    const clean = symbol.trim().toUpperCase();
+    if (!clean) return;
+    setAssistantLoading(true);
+    setError(null);
+    try {
+      const response = await apiPost<{ messages: string[]; report: ResearchReport }>(`/api/assistant/${clean}`, {
+        provider_id: providerId,
+        use_llm: useLlm,
+        period,
+        question,
+      });
+      setAssistantMessages(response.messages);
+      if (response.report) setReport(response.report);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAssistantLoading(false);
+    }
+  }
+
   const providerCount = useMemo(
     () => health ? Object.values(health.providers).flat().length : 0,
     [health],
   );
+  const latestRatingBySymbol = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const run of runs) {
+      if (!map.has(run.ticker)) map.set(run.ticker, run.rating || "HOLD");
+    }
+    return map;
+  }, [runs]);
+  const sectors = useMemo(
+    () => Array.from(new Set(overview.watchlist.map((item) => item.sector || "未分类"))),
+    [overview.watchlist],
+  );
+  const filteredSymbols = useMemo(() => {
+    const query = stockSearch.trim().toUpperCase();
+    return overview.watchlist.filter((item) => {
+      const rating = latestRatingBySymbol.get(item.symbol) || "未评级";
+      const matchesQuery = !query || item.symbol.includes(query) || item.name.toUpperCase().includes(query);
+      const matchesSector = sectorFilter === "all" || (item.sector || "未分类") === sectorFilter;
+      const matchesRating = ratingFilter === "all" || rating === ratingFilter || (ratingFilter === "未评级" && rating === "未评级");
+      return matchesQuery && matchesSector && matchesRating;
+    });
+  }, [overview.watchlist, stockSearch, sectorFilter, ratingFilter, latestRatingBySymbol]);
 
   return (
     <main className="min-h-screen bg-[#f5f5f7] text-zinc-950">
@@ -187,15 +264,36 @@ export function Workbench() {
         </section>
 
         <Tabs defaultValue="overview" className="space-y-5">
-          <TabsList className="grid h-auto w-full grid-cols-2 rounded-lg bg-white p-1 shadow-sm md:w-[620px] md:grid-cols-4">
+          <TabsList className="grid h-auto w-full grid-cols-2 rounded-lg bg-white p-1 shadow-sm md:w-[920px] md:grid-cols-6">
             <TabsTrigger value="overview">市场概览</TabsTrigger>
+            <TabsTrigger value="universe">股票池</TabsTrigger>
             <TabsTrigger value="research">单股研究</TabsTrigger>
+            <TabsTrigger value="assistant">Agent助手</TabsTrigger>
+            <TabsTrigger value="strategy">策略评级</TabsTrigger>
             <TabsTrigger value="reports">报告历史</TabsTrigger>
-            <TabsTrigger value="settings">模型设置</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-5">
             <OverviewTab loading={loading} overview={overview} />
+          </TabsContent>
+
+          <TabsContent value="universe" className="space-y-5">
+            <StockUniverseTab
+              symbols={filteredSymbols}
+              sectors={sectors}
+              stockSearch={stockSearch}
+              setStockSearch={setStockSearch}
+              sectorFilter={sectorFilter}
+              setSectorFilter={setSectorFilter}
+              ratingFilter={ratingFilter}
+              setRatingFilter={setRatingFilter}
+              ratingBySymbol={latestRatingBySymbol}
+              quotes={overview.quotes}
+              onSelect={(item) => void selectSymbol(item.symbol)}
+              onAnalyze={(item) => {
+                void runResearch(item.symbol);
+              }}
+            />
           </TabsContent>
 
           <TabsContent value="research" className="space-y-5">
@@ -211,19 +309,36 @@ export function Workbench() {
               setUseLlm={setUseLlm}
               analyzing={analyzing}
               runResearch={runResearch}
+              runAssistant={runAssistant}
+              assistantLoading={assistantLoading}
+              assistantMessages={assistantMessages}
               report={report}
               profile={profile}
             />
           </TabsContent>
 
+          <TabsContent value="assistant" className="space-y-5">
+            <AssistantTab
+              symbol={symbol}
+              watchlist={overview.watchlist}
+              onSelect={(next) => void selectSymbol(next)}
+              onAsk={runAssistant}
+              loading={assistantLoading}
+              messages={assistantMessages}
+              report={report}
+            />
+          </TabsContent>
+
+          <TabsContent value="strategy" className="space-y-5">
+            <StrategyTab overview={overview} runs={runs} report={report} onSelect={(next) => void selectSymbol(next)} />
+          </TabsContent>
+
           <TabsContent value="reports">
             <ReportsTab runs={runs} />
           </TabsContent>
-
-          <TabsContent value="settings">
-            <SettingsTab health={health} providers={providers} />
-          </TabsContent>
         </Tabs>
+
+        <SettingsTab health={health} providers={providers} />
       </div>
     </main>
   );
@@ -336,6 +451,126 @@ function OverviewTab({ loading, overview }: { loading: boolean; overview: Overvi
   );
 }
 
+function StockUniverseTab(props: {
+  symbols: SymbolItem[];
+  sectors: string[];
+  stockSearch: string;
+  setStockSearch: (value: string) => void;
+  sectorFilter: string;
+  setSectorFilter: (value: string) => void;
+  ratingFilter: string;
+  setRatingFilter: (value: string) => void;
+  ratingBySymbol: Map<string, string>;
+  quotes: Quote[];
+  onSelect: (item: SymbolItem) => void;
+  onAnalyze: (item: SymbolItem) => void;
+}) {
+  const quoteMap = new Map(props.quotes.map((quote) => [quote.symbol || "", quote]));
+  return (
+    <section className="grid gap-5 lg:grid-cols-[0.76fr_1.24fr]">
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Layers3 className="h-4 w-4" />
+            股票池筛选
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+            <Input
+              className="pl-9"
+              value={props.stockSearch}
+              onChange={(event) => props.setStockSearch(event.target.value)}
+              placeholder="搜索代码 / 公司名"
+            />
+          </div>
+          <Select value={props.sectorFilter} onValueChange={props.setSectorFilter}>
+            <SelectTrigger><SelectValue placeholder="板块" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部板块</SelectItem>
+              {props.sectors.map((sector) => <SelectItem key={sector} value={sector}>{sector}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={props.ratingFilter} onValueChange={props.setRatingFilter}>
+            <SelectTrigger><SelectValue placeholder="评级" /></SelectTrigger>
+            <SelectContent>
+              {["all", "BUY", "HOLD", "SELL", "未评级"].map((rating) => (
+                <SelectItem key={rating} value={rating}>{rating === "all" ? "全部评级" : rating}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="grid grid-cols-2 gap-2 pt-2">
+            {props.sectors.slice(0, 8).map((sector) => (
+              <button
+                key={sector}
+                onClick={() => props.setSectorFilter(sector)}
+                className="rounded-lg border bg-zinc-50 px-3 py-2 text-left text-xs font-medium text-zinc-700 hover:bg-white"
+              >
+                {sector}
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between text-base">
+            <span>可选股票列表</span>
+            <Badge variant="secondary" className="rounded-md">{props.symbols.length} 支</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {props.symbols.map((item) => {
+              const quote = quoteMap.get(item.symbol);
+              const rating = props.ratingBySymbol.get(item.symbol) || "未评级";
+              return (
+                <div
+                  key={item.symbol}
+                  onClick={() => props.onSelect(item)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") props.onSelect(item);
+                  }}
+                  className="rounded-lg border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-400 hover:shadow-md"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-sm font-semibold">{item.symbol}</p>
+                      <p className="mt-1 line-clamp-1 text-sm text-zinc-700">{item.name}</p>
+                    </div>
+                    <RatingBadge rating={rating === "未评级" ? "HOLD" : rating} />
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                    <MiniMetric label="板块" value={item.sector || "未分类"} />
+                    <MiniMetric label="价格" value={formatNumber(quote?.close)} />
+                  </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <Pct value={quote?.change_pct} />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        props.onAnalyze(item);
+                      }}
+                    >
+                      Agent分析
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
 function ResearchTab(props: {
   symbol: string;
   setSymbol: (value: string) => void;
@@ -348,6 +583,9 @@ function ResearchTab(props: {
   setUseLlm: (value: boolean) => void;
   analyzing: boolean;
   runResearch: () => void;
+  runAssistant: () => void;
+  assistantLoading: boolean;
+  assistantMessages: string[];
   report: ResearchReport | null;
   profile: SymbolProfile | null;
 }) {
@@ -389,7 +627,7 @@ function ResearchTab(props: {
             />
             LLM
           </label>
-          <Button onClick={props.runResearch} disabled={props.analyzing} className="min-w-32">
+          <Button onClick={() => props.runResearch()} disabled={props.analyzing} className="min-w-32">
             {props.analyzing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Brain className="mr-2 h-4 w-4" />}
             Analyze
           </Button>
@@ -413,6 +651,12 @@ function ResearchTab(props: {
       </section>
 
       {props.report ? <ReportDetail report={props.report} /> : null}
+      <AgentAssistantCard
+        messages={props.assistantMessages}
+        loading={props.assistantLoading}
+        onAsk={() => props.runAssistant()}
+        report={props.report}
+      />
     </>
   );
 }
@@ -461,6 +705,51 @@ function ReportDetail({ report }: { report: ResearchReport }) {
 
   return (
     <section className="grid gap-5 lg:grid-cols-4">
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ClipboardList className="h-4 w-4" />
+            信息收集员总结
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm leading-6 text-zinc-700">{report.information_summary?.summary || "暂无摘要"}</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <InfoList title="结构化事实" items={report.information_summary?.structured_facts || []} />
+            <InfoList title="非结构观察" items={report.information_summary?.unstructured_notes || []} />
+          </div>
+          {report.information_summary?.data_gaps?.length ? (
+            <InfoList title="数据缺口" items={report.information_summary.data_gaps} tone="warning" />
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Target className="h-4 w-4" />
+            交易策略员
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {report.trading_strategy ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <MiniMetric label="动作" value={strategyLabel(report.trading_strategy.action)} />
+                <MiniMetric label="仓位" value={`${report.trading_strategy.position_size_pct}%`} />
+                <MiniMetric label="止损" value={formatNumber(report.trading_strategy.stop_loss)} />
+                <MiniMetric label="止盈" value={formatNumber(report.trading_strategy.take_profit)} />
+              </div>
+              <MiniMetric label="入场区间" value={report.trading_strategy.entry_zone} />
+              <InfoList title="策略依据" items={report.trading_strategy.rationale} />
+              <InfoList title="失效条件" items={report.trading_strategy.invalidation} tone="warning" />
+            </div>
+          ) : (
+            <p className="text-sm text-zinc-500">暂无交易策略。</p>
+          )}
+        </CardContent>
+      </Card>
+
       {views.map(([label, view]) => (
         <Card key={label} className="rounded-lg border-white/80 bg-white shadow-sm">
           <CardHeader>
@@ -490,6 +779,175 @@ function ReportDetail({ report }: { report: ResearchReport }) {
         <CardHeader><CardTitle className="text-base">Bear Case</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {report.bear_case.map((item) => <Bullet key={item} tone="negative" text={item} />)}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function AgentAssistantCard({
+  messages,
+  loading,
+  onAsk,
+  report,
+}: {
+  messages: string[];
+  loading: boolean;
+  onAsk: () => void;
+  report: ResearchReport | null;
+}) {
+  return (
+    <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between text-base">
+          <span className="flex items-center gap-2"><Bot className="h-4 w-4" />Agent 助手分析</span>
+          <Button size="sm" variant="outline" onClick={onAsk} disabled={loading}>
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MessageSquareText className="mr-2 h-4 w-4" />}
+            让助手总结
+          </Button>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+        <div className="space-y-3">
+          {(messages.length ? messages : ["助手会读取最新研究报告，分别用信息收集员和交易策略员人格给出重点总结。"]).map((message, index) => (
+            <div key={`${message}-${index}`} className="rounded-lg border bg-zinc-50 px-4 py-3 text-sm leading-6 text-zinc-700">
+              {message}
+            </div>
+          ))}
+        </div>
+        <div className="rounded-lg border bg-white p-4">
+          <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">当前上下文</p>
+          <p className="mt-2 text-sm leading-6 text-zinc-700">
+            {report?.thesis || "还没有当前报告。先在单股研究页运行 Analyze，或直接点击助手总结生成基础分析。"}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AssistantTab(props: {
+  symbol: string;
+  watchlist: SymbolItem[];
+  onSelect: (symbol: string) => void;
+  onAsk: (question?: string) => void;
+  loading: boolean;
+  messages: string[];
+  report: ResearchReport | null;
+}) {
+  const [question, setQuestion] = useState("这只股票现在适合观察、持有还是减仓？");
+  return (
+    <section className="grid gap-5 lg:grid-cols-[0.72fr_1.28fr]">
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader><CardTitle className="text-base">选择股票给 Agent 助手</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <Select value={props.symbol} onValueChange={props.onSelect}>
+            <SelectTrigger><SelectValue placeholder="选择股票" /></SelectTrigger>
+            <SelectContent>
+              {props.watchlist.map((item) => (
+                <SelectItem key={item.symbol} value={item.symbol}>{item.symbol} · {item.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="问助手一个研究问题" />
+          <Button className="w-full" onClick={() => props.onAsk(question)} disabled={props.loading}>
+            {props.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Bot className="mr-2 h-4 w-4" />}
+            启动助手分析
+          </Button>
+          <p className="text-xs leading-5 text-zinc-500">
+            助手会优先读取最新结构化报告；如没有报告，会触发一次轻量研究流水线。
+          </p>
+        </CardContent>
+      </Card>
+      <AgentAssistantCard messages={props.messages} loading={props.loading} onAsk={() => props.onAsk(question)} report={props.report} />
+    </section>
+  );
+}
+
+function StrategyTab({
+  overview,
+  runs,
+  report,
+  onSelect,
+}: {
+  overview: Overview;
+  runs: RunSummary[];
+  report: ResearchReport | null;
+  onSelect: (symbol: string) => void;
+}) {
+  const ratingCounts = overview.ratings?.counts || {};
+  return (
+    <section className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
+      <div className="space-y-5">
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><TrendingUp className="h-4 w-4" />投资评级分布</CardTitle></CardHeader>
+          <CardContent className="grid grid-cols-3 gap-3">
+            {["BUY", "HOLD", "SELL"].map((rating) => (
+              <div key={rating} className="rounded-lg border bg-zinc-50 p-4">
+                <RatingBadge rating={rating} />
+                <p className="mt-3 text-2xl font-semibold">{ratingCounts[rating] || runs.filter((run) => run.rating === rating).length}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers3 className="h-4 w-4" />板块分类</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            {(overview.sectors || []).map((sector) => (
+              <div key={sector.sector} className="rounded-lg border bg-zinc-50 p-3">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium">{sector.sector}</p>
+                  <Badge variant="secondary">{sector.count} 支</Badge>
+                </div>
+                <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                  <span>上涨 {sector.positive} / 下跌 {sector.negative}</span>
+                  <Pct value={sector.avg_change_pct} />
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-base">最新策略与评级股票</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {report?.trading_strategy ? (
+            <div className="rounded-lg border bg-zinc-50 p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-mono text-sm font-semibold">{report.symbol}</p>
+                  <p className="text-sm text-zinc-600">{report.company_name}</p>
+                </div>
+                <RatingBadge rating={report.rating} />
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                <MiniMetric label="动作" value={strategyLabel(report.trading_strategy.action)} />
+                <MiniMetric label="仓位" value={`${report.trading_strategy.position_size_pct}%`} />
+                <MiniMetric label="入场" value={report.trading_strategy.entry_zone} />
+                <MiniMetric label="目标" value={formatNumber(report.trading_strategy.take_profit)} />
+              </div>
+            </div>
+          ) : null}
+          <div className="grid gap-3 md:grid-cols-2">
+            {runs.slice(0, 12).map((run) => (
+              <button
+                key={run.id}
+                onClick={() => onSelect(run.ticker)}
+                className="rounded-lg border bg-white p-4 text-left shadow-sm hover:border-zinc-400"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-mono text-sm font-semibold">{run.ticker}</p>
+                    <p className="text-sm text-zinc-600">{run.company_name || "-"}</p>
+                  </div>
+                  <RatingBadge rating={run.rating || "HOLD"} />
+                </div>
+                <p className="mt-3 text-xs text-zinc-500">{new Date(run.created_at).toLocaleString()}</p>
+              </button>
+            ))}
+          </div>
         </CardContent>
       </Card>
     </section>
@@ -579,9 +1037,35 @@ function MiniMetric({ label, value }: { label: string; value: string | number | 
   );
 }
 
+function InfoList({ title, items, tone = "default" }: { title: string; items: string[]; tone?: "default" | "warning" }) {
+  const dot = tone === "warning" ? "bg-amber-500" : "bg-zinc-500";
+  return (
+    <div className="rounded-lg border bg-zinc-50 p-3">
+      <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">{title}</p>
+      <div className="mt-3 space-y-2">
+        {(items.length ? items : ["暂无"]).slice(0, 8).map((item) => (
+          <div key={item} className="flex gap-2 text-xs leading-5 text-zinc-700">
+            <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+            <span>{item}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RatingBadge({ rating }: { rating: string }) {
   const color = rating === "BUY" ? "bg-emerald-600" : rating === "SELL" ? "bg-red-600" : "bg-zinc-900";
   return <Badge className={`rounded-md ${color}`}>{rating}</Badge>;
+}
+
+function strategyLabel(action: string) {
+  return {
+    accumulate: "分批买入",
+    hold: "持有观察",
+    reduce: "降低仓位",
+    avoid: "暂时回避",
+  }[action] || action;
 }
 
 function ScorePill({ score }: { score: number }) {

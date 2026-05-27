@@ -33,6 +33,14 @@ def test_run_research_endpoint_with_mock_pipeline(monkeypatch):
         )
 
     monkeypatch.setattr("src.api.main.run_research_pipeline", fake_pipeline)
+    class FakeRepo:
+        def create_tables(self):
+            return None
+
+        def save(self, data):
+            return 1
+
+    monkeypatch.setattr("src.api.main._report_repo", lambda: FakeRepo())
     client = TestClient(app)
     response = client.post("/api/research/AAPL", json={"use_llm": False})
     assert response.status_code == 200

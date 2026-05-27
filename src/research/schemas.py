@@ -23,6 +23,25 @@ class AnalystView(BaseModel):
     data_quality: Literal["high", "limited", "missing"] = "limited"
 
 
+class InformationSummary(BaseModel):
+    structured_facts: list[str] = Field(default_factory=list)
+    unstructured_notes: list[str] = Field(default_factory=list)
+    data_gaps: list[str] = Field(default_factory=list)
+    source_count: int = 0
+    summary: str = ""
+
+
+class TradingStrategy(BaseModel):
+    action: Literal["accumulate", "hold", "reduce", "avoid"]
+    horizon: Literal["swing", "position", "long_term"] = "position"
+    entry_zone: str = ""
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    position_size_pct: float = Field(default=0, ge=0, le=100)
+    rationale: list[str] = Field(default_factory=list)
+    invalidation: list[str] = Field(default_factory=list)
+
+
 class ResearchReport(BaseModel):
     run_id: str
     symbol: str
@@ -39,6 +58,8 @@ class ResearchReport(BaseModel):
     financial_quality: AnalystView
     technical: AnalystView
     sentiment: AnalystView
+    information_summary: InformationSummary = Field(default_factory=InformationSummary)
+    trading_strategy: TradingStrategy | None = None
     bull_case: list[str] = Field(default_factory=list)
     bear_case: list[str] = Field(default_factory=list)
     catalysts: list[str] = Field(default_factory=list)

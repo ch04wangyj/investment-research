@@ -66,6 +66,23 @@ export type ResearchReport = {
   financial_quality: AnalystView;
   technical: AnalystView;
   sentiment: AnalystView;
+  information_summary: {
+    structured_facts: string[];
+    unstructured_notes: string[];
+    data_gaps: string[];
+    source_count: number;
+    summary: string;
+  };
+  trading_strategy?: {
+    action: "accumulate" | "hold" | "reduce" | "avoid";
+    horizon: "swing" | "position" | "long_term";
+    entry_zone: string;
+    stop_loss?: number | null;
+    take_profit?: number | null;
+    position_size_pct: number;
+    rationale: string[];
+    invalidation: string[];
+  } | null;
   bull_case: string[];
   bear_case: string[];
   catalysts: string[];
@@ -90,6 +107,31 @@ export type SymbolProfile = {
   quote: { payload?: Quote[]; source?: string; as_of?: string; stale?: boolean; error?: string | null };
   fundamentals: { payload?: Record<string, unknown>; source?: string; as_of?: string; stale?: boolean; error?: string | null };
   history: { payload?: HistoryPoint[]; source?: string; as_of?: string; stale?: boolean; error?: string | null };
+};
+
+export type SectorSummary = {
+  sector: string;
+  count: number;
+  avg_change_pct?: number | null;
+  positive: number;
+  negative: number;
+  symbols: Array<{
+    symbol: string;
+    name: string;
+    exchange: string;
+    change_pct?: number | null;
+  }>;
+};
+
+export type RatingSummary = {
+  counts: Record<string, number>;
+  buckets: Record<string, Array<{
+    symbol: string;
+    company_name?: string;
+    rating: string;
+    confidence: string;
+    created_at?: string;
+  }>>;
 };
 
 export async function apiGet<T>(path: string): Promise<T> {

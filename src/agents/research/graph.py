@@ -15,7 +15,13 @@ from src.analysis.technical import compute_technical_snapshot
 from src.core.llm import create_chat_model
 from src.data.dal import detect_market, get_dal, normalize_symbol
 from src.data.news_fetcher import fetch_financial_news
-from src.research.schemas import AnalystView, DataSource, ResearchReport
+from src.research.schemas import (
+    AnalystView,
+    DataSource,
+    InformationSummary,
+    ResearchReport,
+    TradingStrategy,
+)
 
 
 class ResearchState(TypedDict, total=False):
@@ -29,12 +35,14 @@ class ResearchState(TypedDict, total=False):
     fundamentals: dict[str, Any]
     history: list[dict[str, Any]]
     sources: list[dict[str, Any]]
+    information_summary: InformationSummary
     valuation: AnalystView
     financial_quality: AnalystView
     technical: AnalystView
     sentiment: AnalystView
     bull_case: list[str]
     bear_case: list[str]
+    trading_strategy: TradingStrategy
     report: ResearchReport
     llm_status: str
     errors: list[str]
@@ -43,20 +51,24 @@ class ResearchState(TypedDict, total=False):
 def build_research_graph():
     workflow = StateGraph(ResearchState)
     workflow.add_node("DataCollector", data_collector)
+    workflow.add_node("InformationSummarizer", information_summarizer)
     workflow.add_node("FundamentalAnalyst", fundamental_analyst)
     workflow.add_node("TechnicalAnalyst", technical_analyst)
     workflow.add_node("NewsSentimentAnalyst", news_sentiment_analyst)
     workflow.add_node("BullResearcher", bull_researcher)
     workflow.add_node("BearResearcher", bear_researcher)
+    workflow.add_node("TradingStrategist", trading_strategist)
     workflow.add_node("ResearchDirector", research_director)
 
     workflow.set_entry_point("DataCollector")
-    workflow.add_edge("DataCollector", "FundamentalAnalyst")
+    workflow.add_edge("DataCollector", "InformationSummarizer")
+    workflow.add_edge("InformationSummarizer", "FundamentalAnalyst")
     workflow.add_edge("FundamentalAnalyst", "TechnicalAnalyst")
     workflow.add_edge("TechnicalAnalyst", "NewsSentimentAnalyst")
     workflow.add_edge("NewsSentimentAnalyst", "BullResearcher")
     workflow.add_edge("BullResearcher", "BearResearcher")
-    workflow.add_edge("BearResearcher", "ResearchDirector")
+    workflow.add_edge("BearResearcher", "TradingStrategist")
+    workflow.add_edge("TradingStrategist", "ResearchDirector")
     workflow.add_edge("ResearchDirector", END)
     return workflow.compile(name="InstitutionalResearchPipeline")
 
@@ -114,6 +126,62 @@ def data_collector(state: ResearchState) -> dict[str, Any]:
         "history": history,
         "sources": sources,
         "errors": errors,
+    }
+
+
+def information_summarizer(state: ResearchState) -> dict[str, Any]:
+    """Collect structured facts and non-structured notes for downstream agents."""
+    quote = state.get("quote", {})
+    fundamentals = state.get("fundamentals", {})
+    history = state.get("history", [])
+    sources = state.get("sources", [])
+
+    facts = [
+        f"标的 {state['symbol']}，市场 {state['market']}",
+        f"最新价 {quote.get('close')}" if quote.get("close") is not None else "最新价缺失",
+        f"涨跌幅 {quote.get('change_pct'):.2f}%" if isinstance(quote.get("change_pct"), (int, float)) else "涨跌幅缺失",
+        f"历史样本 {len(history)} 条",
+    ]
+    for key, label in [
+        ("pe_ratio", "PE"),
+        ("pb_ratio", "PB"),
+        ("roe", "ROE"),
+        ("market_cap", "市值"),
+        ("sector", "板块"),
+    ]:
+        if fundamentals.get(key) is not None:
+            facts.append(f"{label}: {fundamentals.get(key)}")
+
+    notes = []
+    if history:
+        first = _num(history[0].get("close"))
+        last = _num(history[-1].get("close"))
+        if first and last:
+            notes.append(f"所选周期价格变化 {(last / first - 1) * 100:.1f}%，用于判断动量而非预测收益。")
+    if quote.get("name") or fundamentals.get("company_name"):
+        notes.append(f"公司/简称：{fundamentals.get('company_name') or quote.get('name')}")
+    notes.append("TradingAgents-CN 风格参考：先收集事实，再由多角色分工辩证，最后形成可解释策略。")
+
+    gaps = []
+    if not quote:
+        gaps.append("行情数据缺失")
+    if not fundamentals or not any(fundamentals.get(k) is not None for k in ["pe_ratio", "pb_ratio", "roe"]):
+        gaps.append("估值或盈利指标不完整")
+    if len(history) < 40:
+        gaps.append("历史价格样本偏短")
+    for item in sources:
+        if item.get("error"):
+            gaps.append(f"{item.get('source')}: {item.get('error')}")
+
+    summary = "；".join(facts[:4])
+    return {
+        "information_summary": InformationSummary(
+            structured_facts=facts,
+            unstructured_notes=notes,
+            data_gaps=gaps[:6],
+            source_count=len([item for item in sources if item.get("payload") is not None]),
+            summary=summary,
+        )
     }
 
 
@@ -236,6 +304,68 @@ def bear_researcher(state: ResearchState) -> dict[str, Any]:
     return {"bear_case": bear[:4]}
 
 
+def trading_strategist(state: ResearchState) -> dict[str, Any]:
+    composite = sum([
+        state["valuation"].score,
+        state["financial_quality"].score,
+        state["technical"].score,
+        state["sentiment"].score,
+    ]) / 4
+    quote = state.get("quote", {})
+    current_price = _num(quote.get("close") or state.get("fundamentals", {}).get("current_price"))
+    volatility = _extract_indicator(state["technical"].evidence, "annualized_volatility_pct")
+    trend = "uptrend" if "trend: uptrend" in state["technical"].evidence else (
+        "downtrend" if "trend: downtrend" in state["technical"].evidence else "neutral"
+    )
+
+    if composite >= 65 and trend != "downtrend":
+        action = "accumulate"
+        position = 12.0
+    elif composite <= 42 or trend == "downtrend":
+        action = "reduce"
+        position = 0.0 if composite <= 35 else 4.0
+    elif composite < 48:
+        action = "avoid"
+        position = 0.0
+    else:
+        action = "hold"
+        position = 8.0
+
+    stop_loss = None
+    take_profit = None
+    entry_zone = "等待价格回到关键均线或放量突破后再评估"
+    if current_price is not None:
+        risk_band = 0.07 if volatility is None else max(min(volatility / 300, 0.14), 0.05)
+        stop_loss = round(current_price * (1 - risk_band), 2)
+        take_profit = round(current_price * (1 + risk_band * 1.8), 2)
+        low_entry = round(current_price * 0.98, 2)
+        high_entry = round(current_price * 1.02, 2)
+        entry_zone = f"{low_entry} - {high_entry}"
+
+    rationale = [
+        f"综合评分 {composite:.1f}",
+        f"技术状态 {trend}",
+        f"估值/质量/技术/情绪分数分别为 {state['valuation'].score:.0f}/{state['financial_quality'].score:.0f}/{state['technical'].score:.0f}/{state['sentiment'].score:.0f}",
+    ]
+    invalidation = [
+        "数据源连续失败或关键财务指标缺失扩大",
+        "价格跌破止损区间且没有基本面改善证据",
+        "重大政策、财报或流动性事件改变原始假设",
+    ]
+    return {
+        "trading_strategy": TradingStrategy(
+            action=action,
+            horizon="position",
+            entry_zone=entry_zone,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            position_size_pct=position,
+            rationale=rationale,
+            invalidation=invalidation,
+        )
+    }
+
+
 def research_director(state: ResearchState) -> dict[str, Any]:
     scores = [
         state["valuation"].score,
@@ -310,6 +440,8 @@ def research_director(state: ResearchState) -> dict[str, Any]:
         financial_quality=state["financial_quality"],
         technical=state["technical"],
         sentiment=state["sentiment"],
+        information_summary=state["information_summary"],
+        trading_strategy=state.get("trading_strategy"),
         bull_case=state.get("bull_case", []),
         bear_case=state.get("bear_case", []),
         catalysts=[
@@ -383,3 +515,11 @@ def _num(value: Any) -> float | None:
 
 def _clamp(value: float) -> float:
     return max(0.0, min(100.0, round(value, 2)))
+
+
+def _extract_indicator(evidence: list[str], key: str) -> float | None:
+    prefix = f"{key}: "
+    for item in evidence:
+        if item.startswith(prefix):
+            return _num(item.removeprefix(prefix))
+    return None
