@@ -13,8 +13,8 @@ export function PriceChart({ data }: Props) {
 
   if (clean.length < 2) {
     return (
-      <div className="flex h-72 items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-white text-sm text-zinc-500">
-        暂无足够 K 线数据
+      <div className="flex h-72 items-center justify-center rounded-lg border border-dashed border-teal-200 bg-teal-50/50 px-6 text-center text-sm leading-6 text-teal-800">
+        K 线还没凑齐，蜡烛图正在后台排队 / Waiting for enough candles
       </div>
     );
   }
@@ -40,7 +40,7 @@ export function PriceChart({ data }: Props) {
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
-      className="h-80 w-full rounded-lg border bg-white shadow-sm"
+      className="h-80 w-full rounded-lg border border-slate-200 bg-white/90 shadow-[0_10px_24px_rgba(15,23,42,0.06)]"
       role="img"
       aria-label="Candlestick and volume chart"
     >

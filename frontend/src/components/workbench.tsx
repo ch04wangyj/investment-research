@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Activity,
   AlertCircle,
@@ -339,11 +339,13 @@ export function Workbench() {
   }, [overview.watchlist, stockSearch, sectorFilter, ratingFilter, latestRatingBySymbol]);
 
   return (
-    <main className="min-h-screen bg-[#f5f5f7] text-zinc-950">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
-        <header className="flex flex-col gap-4 rounded-lg border border-white/80 bg-white/86 px-5 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
+    <main className="relative min-h-screen overflow-hidden text-zinc-950">
+      <ParticleField />
+      <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
+        <header className="shell-surface relative overflow-hidden rounded-lg border border-white/80 px-5 py-5 backdrop-blur md:flex md:items-center md:justify-between">
+          <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#14b8a6,#3b82f6,#f59e0b,#ec4899)]" />
           <div>
-            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-zinc-500">
+            <div className="inline-flex items-center gap-2 rounded-md border border-teal-100 bg-teal-50/80 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.14em] text-teal-800">
               <Sparkles className="h-3.5 w-3.5" />
               {tx(lang, "Evidence-first AI Research Workbench", "Evidence-first AI Research Workbench")}
             </div>
@@ -358,8 +360,8 @@ export function Workbench() {
               )}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={health?.status === "ok" ? "default" : "secondary"} className="h-8 rounded-md px-3">
+          <div className="mt-4 flex flex-wrap items-center justify-start gap-2 md:mt-0 md:justify-end">
+            <Badge variant={health?.status === "ok" ? "default" : "secondary"} className="h-8 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-emerald-800">
               {health?.status === "ok" ? "API Online" : "API Pending"}
             </Badge>
             <Button variant="outline" size="sm" onClick={() => setLang((value) => (value === "zh" ? "en" : "zh"))}>
@@ -393,15 +395,17 @@ export function Workbench() {
         ) : null}
 
         <section className="grid items-stretch gap-4 md:grid-cols-5">
-          <MetricCard icon={<Gauge />} label={tx(lang, "跟踪股票", "Tracked Symbols")} value={overview.watchlist.length} />
-          <MetricCard icon={<Database />} label={tx(lang, "数据路由", "Data Routes")} value={providerCount} />
-          <MetricCard icon={<FileText />} label={tx(lang, "研报记录", "Research Runs")} value={runs.length} />
-          <MetricCard icon={<ShieldAlert />} label={tx(lang, "风险提醒", "Risk Alerts")} value={activeRiskCount} />
-          <MetricCard icon={<Activity />} label={tx(lang, "API版本", "API Version")} value={health?.version || "0.2.0"} />
+          <MetricCard icon={<Gauge />} label={tx(lang, "跟踪股票", "Tracked Symbols")} value={overview.watchlist.length} tone="teal" />
+          <MetricCard icon={<Database />} label={tx(lang, "数据路由", "Data Routes")} value={providerCount} tone="blue" />
+          <MetricCard icon={<FileText />} label={tx(lang, "研报记录", "Research Runs")} value={runs.length} tone="amber" />
+          <MetricCard icon={<ShieldAlert />} label={tx(lang, "风险提醒", "Risk Alerts")} value={activeRiskCount} tone="rose" />
+          <MetricCard icon={<Activity />} label={tx(lang, "API版本", "API Version")} value={health?.version || "0.2.0"} tone="violet" />
         </section>
 
+        <GuideStrip lang={lang} />
+
         <Tabs defaultValue="research" className="space-y-5">
-          <TabsList className="grid h-auto w-full grid-cols-2 rounded-lg bg-white p-1 shadow-sm md:w-[940px] md:grid-cols-6">
+          <TabsList className="mx-auto grid h-auto w-full grid-cols-2 rounded-lg p-1 md:w-[980px] md:grid-cols-6">
             <TabsTrigger value="research">{tx(lang, "研报工作台", "Research")}</TabsTrigger>
             <TabsTrigger value="evidence">{tx(lang, "资料目录", "Evidence")}</TabsTrigger>
             <TabsTrigger value="strategy">{tx(lang, "策略方法", "Methods")}</TabsTrigger>
@@ -492,15 +496,112 @@ export function Workbench() {
   );
 }
 
-function MetricCard({ icon, label, value }: { icon: ReactNode; label: string; value: string | number }) {
+function ParticleField() {
+  const particles = [
+    ["8%", "12%", "3px", "#14b8a6", "36px", "24px", "7s", "-1s"],
+    ["18%", "34%", "2px", "#3b82f6", "-28px", "34px", "8s", "-3s"],
+    ["31%", "16%", "4px", "#f59e0b", "22px", "-22px", "9s", "-2s"],
+    ["48%", "28%", "2px", "#ec4899", "-30px", "-18px", "7.5s", "-4s"],
+    ["63%", "10%", "3px", "#22c55e", "18px", "30px", "8.4s", "-2.6s"],
+    ["78%", "24%", "2px", "#6366f1", "-24px", "26px", "9.2s", "-5s"],
+    ["88%", "14%", "3px", "#0ea5e9", "20px", "-28px", "7.8s", "-1.8s"],
+    ["10%", "58%", "2px", "#f97316", "34px", "-18px", "10s", "-4.5s"],
+    ["38%", "52%", "3px", "#06b6d4", "-18px", "28px", "8.8s", "-3.8s"],
+    ["70%", "58%", "2px", "#84cc16", "30px", "12px", "9.6s", "-6s"],
+  ] as const;
+  const lines = [
+    ["9%", "22%", "180px", "#14b8a6", "8s", "-2s"],
+    ["42%", "18%", "220px", "#3b82f6", "9s", "-4s"],
+    ["66%", "38%", "170px", "#f59e0b", "7s", "-1s"],
+    ["18%", "68%", "210px", "#ec4899", "10s", "-5s"],
+  ] as const;
+
   return (
-    <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
+    <div className="particle-field" aria-hidden="true">
+      {particles.map(([left, top, size, color, x, y, duration, delay], index) => (
+        <span
+          key={`particle-${index}`}
+          className="particle-dot"
+          style={{
+            left,
+            top,
+            "--particle-size": size,
+            "--particle-color": color,
+            "--particle-x": x,
+            "--particle-y": y,
+            "--particle-duration": duration,
+            "--particle-delay": delay,
+          } as CSSProperties}
+        />
+      ))}
+      {lines.map(([left, top, width, color, duration, delay], index) => (
+        <span
+          key={`line-${index}`}
+          className="particle-line"
+          style={{
+            left,
+            top,
+            "--line-width": width,
+            "--line-color": color,
+            "--line-duration": duration,
+            "--line-delay": delay,
+          } as CSSProperties}
+        />
+      ))}
+    </div>
+  );
+}
+
+function GuideStrip({ lang }: { lang: Lang }) {
+  const lines = [
+    tx(lang, "先喂材料，再问观点；别让模型空腹写研报。", "Feed the evidence first; never ask a model to write hungry."),
+    tx(lang, "市场先生今天心情未知，我们先查账本。", "Mr. Market has moods. We check the ledger first."),
+    tx(lang, "观点可以幽默，证据必须严肃。", "The tone can smile; the evidence cannot bluff."),
+  ];
+  return (
+    <section className="grid gap-3 rounded-lg border border-white/80 bg-white/70 p-3 shadow-[0_12px_32px_rgba(15,23,42,0.06)] backdrop-blur md:grid-cols-3">
+      {lines.map((line, index) => (
+        <div key={line} className="flex min-h-16 items-center gap-3 rounded-lg border bg-white/72 px-4 py-3">
+          <span className={[
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold",
+            index === 0 ? "bg-teal-50 text-teal-700" : index === 1 ? "bg-amber-50 text-amber-700" : "bg-sky-50 text-sky-700",
+          ].join(" ")}
+          >
+            {index + 1}
+          </span>
+          <p className="text-sm leading-5 text-zinc-700">{line}</p>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string | number;
+  tone: "teal" | "blue" | "amber" | "rose" | "violet";
+}) {
+  const tones = {
+    teal: "from-teal-50 to-white text-teal-700 border-teal-100",
+    blue: "from-sky-50 to-white text-sky-700 border-sky-100",
+    amber: "from-amber-50 to-white text-amber-700 border-amber-100",
+    rose: "from-rose-50 to-white text-rose-700 border-rose-100",
+    violet: "from-violet-50 to-white text-violet-700 border-violet-100",
+  }[tone];
+  return (
+    <Card className="h-full rounded-lg border-white/80 bg-white/84 shadow-[0_12px_34px_rgba(15,23,42,0.06)]">
       <CardContent className="flex items-center justify-between p-5">
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">{label}</p>
           <p className="mt-2 text-2xl font-semibold tracking-tight">{value}</p>
         </div>
-        <div className="rounded-lg border bg-zinc-50 p-2 text-zinc-700 [&_svg]:h-5 [&_svg]:w-5">{icon}</div>
+        <div className={`rounded-lg border bg-gradient-to-br p-2 ${tones} [&_svg]:h-5 [&_svg]:w-5`}>{icon}</div>
       </CardContent>
     </Card>
   );
@@ -519,7 +620,11 @@ function NewsDirectory({ items, lang }: { items: Array<Record<string, unknown>>;
   ];
 
   if (!items.length) {
-    return <div className="rounded-lg border border-dashed bg-zinc-50 p-6 text-sm text-zinc-500">{tx(lang, "暂无新闻流。", "No news feed yet.")}</div>;
+    return (
+      <div className="rounded-lg border border-dashed border-sky-200 bg-sky-50/60 p-6 text-sm leading-6 text-sky-800">
+        {tx(lang, "新闻流还没开张。先喝口水，下一次刷新可能就有市场小作文。", "The news feed has not opened shop yet. Hydrate first; the next refresh may bring market essays.")}
+      </div>
+    );
   }
 
   return (
@@ -739,7 +844,11 @@ function EvidenceGroup({ title, items, lang }: { title: string; items: EvidenceI
             {item.summary ? <span className="mt-2 line-clamp-2 block text-xs leading-5 text-zinc-600">{item.summary}</span> : null}
           </a>
         ))}
-        {!items.length ? <p className="rounded-md bg-white px-3 py-2 text-xs text-zinc-500">{tx(lang, "暂无可用来源，报告会降低置信度。", "No available source; confidence will be reduced.")}</p> : null}
+        {!items.length ? (
+          <p className="rounded-md bg-white px-3 py-2 text-xs leading-5 text-zinc-500">
+            {tx(lang, "暂无可用来源。研究员已把自信心音量调小。", "No available source. Confidence volume has been turned down.")}
+          </p>
+        ) : null}
       </div>
     </div>
   );
@@ -1054,41 +1163,45 @@ function ResearchTab(props: {
 
   return (
     <>
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-        <CardContent className="grid gap-3 p-4 md:grid-cols-[1.1fr_0.7fr_1fr_auto_auto]">
+      <Card className="rounded-lg border-white/80 bg-white/84 shadow-[0_14px_38px_rgba(15,23,42,0.07)]">
+        <CardContent className="grid items-center gap-3 p-4 md:grid-cols-[1.1fr_0.7fr_1fr_auto_auto]">
           <div className="relative">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+            <Search className="absolute left-3 top-3 h-4 w-4 text-zinc-400" />
             <Input
-              className="pl-9"
+              className="h-10 border-slate-200 bg-white/80 pl-9 shadow-inner shadow-slate-950/[0.02]"
               value={props.symbol}
               onChange={(event) => props.setSymbol(event.target.value)}
               placeholder="AAPL / 600519 / 00700"
             />
           </div>
           <Select value={props.period} onValueChange={props.setPeriod}>
-            <SelectTrigger><SelectValue placeholder="Period" /></SelectTrigger>
+            <SelectTrigger className="h-10 w-full border-slate-200 bg-white/80"><SelectValue placeholder="Period" /></SelectTrigger>
             <SelectContent>
               {["1mo", "3mo", "6mo", "1y", "2y"].map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={props.providerId} onValueChange={props.setProviderId}>
-            <SelectTrigger><SelectValue placeholder={tx(props.lang, "LLM 服务", "LLM Provider")} /></SelectTrigger>
+            <SelectTrigger className="h-10 w-full border-slate-200 bg-white/80"><SelectValue placeholder={tx(props.lang, "LLM 服务", "LLM Provider")} /></SelectTrigger>
             <SelectContent>
               {props.providers.map((provider) => (
                 <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <label className="flex h-10 items-center gap-2 rounded-lg border px-3 text-sm text-zinc-700">
+          <label className="flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white/80 px-3 text-sm text-zinc-700">
             <input
               type="checkbox"
               checked={props.useLlm}
               onChange={(event) => props.setUseLlm(event.target.checked)}
-              className="h-4 w-4 accent-zinc-950"
+              className="h-4 w-4 accent-teal-700"
             />
             {tx(props.lang, "LLM润色", "LLM Polish")}
           </label>
-          <Button onClick={() => props.runResearch()} disabled={props.analyzing} className="min-w-32">
+          <Button
+            onClick={() => props.runResearch()}
+            disabled={props.analyzing}
+            className="h-10 min-w-32 bg-[#0f766e] text-white shadow-[0_12px_28px_rgba(15,118,110,0.2)] hover:bg-[#115e59]"
+          >
             {props.analyzing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Brain className="mr-2 h-4 w-4" />}
             {tx(props.lang, "生成研报", "Generate")}
           </Button>
@@ -1135,8 +1248,17 @@ function ReportSummary({ report, lang }: { report: ResearchReport | null; lang: 
     return (
       <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
         <CardHeader><CardTitle className="text-base">{tx(lang, "研究结论", "Research Conclusion")}</CardTitle></CardHeader>
-        <CardContent className="text-sm text-zinc-500">
-          {tx(lang, "输入股票代码并运行分析后，这里会显示机构研报摘要。", "Enter a ticker and run analysis to see the institutional-style summary here.")}
+        <CardContent className="space-y-3 text-sm text-zinc-500">
+          <p>
+            {tx(
+              lang,
+              "输入股票代码后点击生成研报。模型可以发言，但证据先坐主桌。",
+              "Enter a ticker and generate a report. The model may speak, but evidence gets the head seat.",
+            )}
+          </p>
+          <div className="rounded-lg border border-teal-100 bg-teal-50/70 px-3 py-2 text-xs leading-5 text-teal-800">
+            {tx(lang, "今日小规矩：没有来源的观点，先去冷静区。", "House rule: unsourced opinions sit in the quiet corner.")}
+          </div>
         </CardContent>
       </Card>
     );
@@ -1406,11 +1528,20 @@ function AgentAssistantCard({
               {message}
             </div>
           ))}
+          {!messages.length ? (
+            <div className="rounded-lg border border-amber-100 bg-amber-50/70 px-4 py-3 text-xs leading-5 text-amber-800">
+              {tx(
+                lang,
+                "助手当前很安静，不是偷懒，是在等一份像样的证据清单。",
+                "The assistant is quiet, not lazy. It is waiting for a decent evidence list.",
+              )}
+            </div>
+          ) : null}
         </div>
-        <div className="rounded-lg border bg-white p-4">
+        <div className="rounded-lg border border-slate-200 bg-white/78 p-4">
           <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">{tx(lang, "当前上下文", "Current Context")}</p>
           <p className="mt-2 text-sm leading-6 text-zinc-700">
-            {report?.thesis || tx(lang, "还没有当前报告。先在研报工作台点击生成研报，或让助手触发一次基础分析。", "No current report yet. Generate one first, or let the assistant trigger a basic analysis.")}
+            {report?.thesis || tx(lang, "还没有当前报告。先让研究流水线跑起来，别让助手凭空气烹饪观点。", "No current report yet. Run the research flow first; do not let the assistant cook with air.")}
           </p>
         </div>
       </CardContent>
