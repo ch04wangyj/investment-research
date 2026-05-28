@@ -57,6 +57,8 @@ import {
   type RiskSummary,
   type SectorSummary,
   type StrategyResearch,
+  type SymbolComparison,
+  type SymbolCompareItem,
   type SymbolItem,
   type SymbolProfile,
   type WorkflowBlueprint,
@@ -123,6 +125,7 @@ export function Workbench() {
   const [overview, setOverview] = useState<Overview>(defaultOverview);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [symbol, setSymbol] = useState("AAPL");
+  const [compareInput, setCompareInput] = useState("AAPL, MSFT, 600519, 00700");
   const [period, setPeriod] = useState("6mo");
   const [providerId, setProviderId] = useState("deepseek");
   const [useLlm, setUseLlm] = useState(true);
@@ -136,14 +139,17 @@ export function Workbench() {
   const [strategyResearch, setStrategyResearch] = useState<StrategyResearch | null>(null);
   const [dailyReads, setDailyReads] = useState<DailyReads | null>(null);
   const [workflowBlueprint, setWorkflowBlueprint] = useState<WorkflowBlueprint | null>(null);
+  const [comparison, setComparison] = useState<SymbolComparison | null>(null);
   const [report, setReport] = useState<ResearchReport | null>(null);
   const [profile, setProfile] = useState<SymbolProfile | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
+  const [comparing, setComparing] = useState(false);
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [riskLoading, setRiskLoading] = useState(false);
-  const [deletingReportId, setDeletingReportId] = useState<number | null>(null);
+  const [deletingReportIds, setDeletingReportIds] = useState<number[]>([]);
+  const [selectedReportIds, setSelectedReportIds] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
@@ -283,6 +289,33 @@ export function Workbench() {
     }
   }
 
+  async function runComparison() {
+    const symbols = parseSymbolInput(compareInput);
+    if (symbols.length < 2) {
+      setError(tx(lang, "至少输入两只股票才能对比。", "Enter at least two symbols to compare."));
+      return;
+    }
+    setComparing(true);
+    setError(null);
+    try {
+      const response = await apiGet<SymbolComparison>(
+        `/api/symbols/compare?symbols=${encodeURIComponent(symbols.join(","))}&period=${encodeURIComponent(period)}`,
+      );
+      setComparison(response);
+    } catch (err) {
+      setError(`股票对比失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setComparing(false);
+    }
+  }
+
+  function appendCompareSymbol(nextSymbol: string) {
+    const current = parseSymbolInput(compareInput);
+    const normalized = nextSymbol.trim().toUpperCase();
+    if (!normalized || current.includes(normalized)) return;
+    setCompareInput([...current, normalized].slice(0, 10).join(", "));
+  }
+
   async function deleteReport(reportId: number) {
     const target = runs.find((run) => run.id === reportId);
     const confirmed = window.confirm(
@@ -293,19 +326,66 @@ export function Workbench() {
       ),
     );
     if (!confirmed) return;
-    setDeletingReportId(reportId);
+    setDeletingReportIds([reportId]);
     setError(null);
     try {
       await apiDelete<{ status: string; id: number }>(`/api/research/runs/${reportId}`);
       setRuns((current) => current.filter((run) => run.id !== reportId));
+      setSelectedReportIds((current) => current.filter((id) => id !== reportId));
       if (target?.run_id && report?.run_id === target.run_id) {
         setReport(null);
       }
     } catch (err) {
       setError(`报告删除失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      setDeletingReportId(null);
+      setDeletingReportIds([]);
     }
+  }
+
+  async function deleteSelectedReports() {
+    const ids = selectedReportIds.filter((id) => runs.some((run) => run.id === id));
+    if (!ids.length) return;
+    const confirmed = window.confirm(
+      tx(
+        lang,
+        `批量删除 ${ids.length} 份历史报告？本地数据库会少一点回忆。`,
+        `Delete ${ids.length} selected reports from local history?`,
+      ),
+    );
+    if (!confirmed) return;
+    const selectedRuns = runs.filter((run) => ids.includes(run.id));
+    setDeletingReportIds(ids);
+    setError(null);
+    try {
+      const response = await apiPost<{ status: string; requested: number; deleted: number; ids: number[] }>(
+        "/api/research/runs/delete",
+        { ids },
+      );
+      setRuns((current) => current.filter((run) => !ids.includes(run.id)));
+      setSelectedReportIds([]);
+      if (report && selectedRuns.some((run) => run.run_id === report.run_id)) {
+        setReport(null);
+      }
+      if (response.deleted !== ids.length) {
+        setError(tx(lang, `已删除 ${response.deleted}/${ids.length} 份报告，部分记录可能已不存在。`, `Deleted ${response.deleted}/${ids.length}; some records may already be gone.`));
+      }
+    } catch (err) {
+      setError(`批量删除失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDeletingReportIds([]);
+    }
+  }
+
+  function toggleReportSelection(reportId: number) {
+    setSelectedReportIds((current) => (
+      current.includes(reportId)
+        ? current.filter((id) => id !== reportId)
+        : [...current, reportId]
+    ));
+  }
+
+  function toggleAllReports(checked: boolean) {
+    setSelectedReportIds(checked ? runs.map((run) => run.id) : []);
   }
 
   const providerCount = useMemo(
@@ -405,10 +485,11 @@ export function Workbench() {
         <GuideStrip lang={lang} />
 
         <Tabs defaultValue="research" className="space-y-5">
-          <TabsList className="mx-auto grid h-auto w-full grid-cols-2 rounded-lg p-1 md:w-[980px] md:grid-cols-6">
+          <TabsList className="mx-auto grid h-auto w-full grid-cols-2 rounded-lg p-1 md:w-[1120px] md:grid-cols-7">
             <TabsTrigger value="research">{tx(lang, "研报工作台", "Research")}</TabsTrigger>
             <TabsTrigger value="evidence">{tx(lang, "资料目录", "Evidence")}</TabsTrigger>
             <TabsTrigger value="strategy">{tx(lang, "策略方法", "Methods")}</TabsTrigger>
+            <TabsTrigger value="compare">{tx(lang, "股票对比", "Compare")}</TabsTrigger>
             <TabsTrigger value="universe">{tx(lang, "股票池", "Universe")}</TabsTrigger>
             <TabsTrigger value="risk">{tx(lang, "风险提醒", "Risk")}</TabsTrigger>
             <TabsTrigger value="reports">{tx(lang, "报告历史", "Reports")}</TabsTrigger>
@@ -450,6 +531,23 @@ export function Workbench() {
             />
           </TabsContent>
 
+          <TabsContent value="compare" className="space-y-5">
+            <StockCompareTab
+              input={compareInput}
+              setInput={setCompareInput}
+              period={period}
+              setPeriod={setPeriod}
+              comparison={comparison}
+              loading={comparing}
+              watchlist={overview.watchlist}
+              onCompare={runComparison}
+              onAppend={appendCompareSymbol}
+              onSelect={(next) => void selectSymbol(next)}
+              onAnalyze={(next) => void runResearch(next)}
+              lang={lang}
+            />
+          </TabsContent>
+
           <TabsContent value="universe" className="space-y-5">
             <StockUniverseTab
               symbols={filteredSymbols}
@@ -486,7 +584,16 @@ export function Workbench() {
           </TabsContent>
 
           <TabsContent value="reports">
-            <ReportsTab runs={runs} lang={lang} onDelete={deleteReport} deletingId={deletingReportId} />
+            <ReportsTab
+              runs={runs}
+              lang={lang}
+              selectedIds={selectedReportIds}
+              deletingIds={deletingReportIds}
+              onToggle={toggleReportSelection}
+              onToggleAll={toggleAllReports}
+              onDelete={deleteReport}
+              onDeleteSelected={deleteSelectedReports}
+            />
           </TabsContent>
         </Tabs>
 
@@ -1016,6 +1123,178 @@ function WorkflowBlueprintPanel({ blueprint, lang }: { blueprint: WorkflowBluepr
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+function StockCompareTab(props: {
+  input: string;
+  setInput: (value: string) => void;
+  period: string;
+  setPeriod: (value: string) => void;
+  comparison: SymbolComparison | null;
+  loading: boolean;
+  watchlist: SymbolItem[];
+  onCompare: () => void;
+  onAppend: (symbol: string) => void;
+  onSelect: (symbol: string) => void;
+  onAnalyze: (symbol: string) => void;
+  lang: Lang;
+}) {
+  const items = props.comparison?.items || [];
+  const insights = comparisonInsights(items, props.lang);
+  return (
+    <section className="grid items-start gap-5 lg:grid-cols-[minmax(320px,0.74fr)_minmax(0,1.26fr)]">
+      <Card className="min-w-0 rounded-lg border-white/80 bg-white/86 shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Layers3 className="h-4 w-4" />
+            {tx(props.lang, "多股对比台", "Multi-Symbol Compare")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">
+              {tx(props.lang, "股票代码", "Symbols")}
+            </p>
+            <textarea
+              value={props.input}
+              onChange={(event) => props.setInput(event.target.value)}
+              className="mt-2 min-h-24 w-full resize-none rounded-lg border border-slate-200 bg-white/80 px-3 py-2 text-sm leading-6 outline-none transition focus:border-teal-500 focus:ring-3 focus:ring-teal-500/15"
+              placeholder="AAPL, MSFT, 600519, 00700"
+            />
+            <p className="mt-2 text-xs leading-5 text-zinc-500">
+              {tx(props.lang, "最多对比 10 只；逗号、分号、换行都可以。", "Compare up to 10 symbols; commas, semicolons, and new lines all work.")}
+            </p>
+          </div>
+          <div className="grid grid-cols-[1fr_auto] items-center gap-3">
+            <Select value={props.period} onValueChange={props.setPeriod}>
+              <SelectTrigger className="h-10 w-full border-slate-200 bg-white/80"><SelectValue placeholder="Period" /></SelectTrigger>
+              <SelectContent>
+                {["1mo", "3mo", "6mo", "1y", "2y"].map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button onClick={props.onCompare} disabled={props.loading} className="h-10 bg-[#0f766e] hover:bg-[#115e59]">
+              {props.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Activity className="mr-2 h-4 w-4" />}
+              {tx(props.lang, "开始对比", "Compare")}
+            </Button>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">
+              {tx(props.lang, "快速加入", "Quick Add")}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {props.watchlist.slice(0, 12).map((item) => (
+                <Button
+                  key={item.symbol}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => props.onAppend(item.symbol)}
+                >
+                  {item.symbol}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2 text-xs leading-5 text-amber-800">
+            {tx(
+              props.lang,
+              "横向对比不是选美：低估值、好质量、强催化剂要一起看。",
+              "Comparison is not a beauty contest: valuation, quality, and catalysts need to sit together.",
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="min-w-0 space-y-5">
+        <Card className="rounded-lg border-white/80 bg-white/86 shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex flex-wrap items-center justify-between gap-3 text-base">
+              <span>{tx(props.lang, "对比摘要", "Comparison Snapshot")}</span>
+              <Badge variant="secondary" className="rounded-md">
+                {props.comparison?.generated_at ? new Date(props.comparison.generated_at).toLocaleString() : tx(props.lang, "未运行", "Not run")}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-3">
+            {insights.map((item) => (
+              <div key={item.label} className={`rounded-lg border px-4 py-3 ${item.className}`}>
+                <p className="text-xs font-medium uppercase tracking-[0.12em] opacity-75">{item.label}</p>
+                <p className="mt-2 text-lg font-semibold">{item.value}</p>
+                <p className="mt-1 text-xs leading-5 opacity-80">{item.note}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg border-white/80 bg-white/86 shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex flex-wrap items-center justify-between gap-3 text-base">
+              <span>{tx(props.lang, "横向数据表", "Comparison Table")}</span>
+              <Badge variant="secondary" className="rounded-md">{items.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table className="min-w-[1120px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Symbol</TableHead>
+                    <TableHead>{tx(props.lang, "公司", "Company")}</TableHead>
+                    <TableHead>{tx(props.lang, "市场", "Market")}</TableHead>
+                    <TableHead>{tx(props.lang, "价格", "Price")}</TableHead>
+                    <TableHead>{tx(props.lang, "涨跌", "Change")}</TableHead>
+                    <TableHead>PE</TableHead>
+                    <TableHead>PB</TableHead>
+                    <TableHead>ROE</TableHead>
+                    <TableHead>{tx(props.lang, "市值", "Mkt Cap")}</TableHead>
+                    <TableHead>{tx(props.lang, "评级", "Rating")}</TableHead>
+                    <TableHead>{tx(props.lang, "来源", "Source")}</TableHead>
+                    <TableHead className="text-right">{tx(props.lang, "操作", "Action")}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {items.map((item) => (
+                    <TableRow key={item.symbol}>
+                      <TableCell className="font-mono font-medium">{item.symbol}</TableCell>
+                      <TableCell className="max-w-48 truncate">{item.company_name || "-"}</TableCell>
+                      <TableCell>{marketLabel(item.market, props.lang)}</TableCell>
+                      <TableCell>{formatNumber(item.price)}</TableCell>
+                      <TableCell><Pct value={item.change_pct} /></TableCell>
+                      <TableCell>{formatNumber(item.pe_ratio)}</TableCell>
+                      <TableCell>{formatNumber(item.pb_ratio)}</TableCell>
+                      <TableCell>{formatPercent(item.roe)}</TableCell>
+                      <TableCell>{formatNumber(item.market_cap)}</TableCell>
+                      <TableCell>{item.rating ? <RatingBadge rating={item.rating} /> : <span className="text-zinc-500">-</span>}</TableCell>
+                      <TableCell className="max-w-44 truncate text-xs text-zinc-500">
+                        {item.data_sources.quote || item.data_sources.fundamentals || "-"}
+                        {item.stale ? ` · ${tx(props.lang, "缓存", "stale")}` : ""}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button size="sm" variant="outline" onClick={() => props.onSelect(item.symbol)}>
+                            {tx(props.lang, "查看", "Open")}
+                          </Button>
+                          <Button size="sm" variant="secondary" onClick={() => props.onAnalyze(item.symbol)}>
+                            {tx(props.lang, "研报", "Report")}
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {!items.length ? (
+                    <TableRow>
+                      <TableCell colSpan={12} className="h-32 text-center text-sm text-zinc-500">
+                        {tx(props.lang, "输入多只股票后运行对比。横向表还没开席。", "Enter multiple symbols and run comparison. The table is waiting for guests.")}
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </section>
   );
 }
 
@@ -1670,28 +1949,60 @@ function ReportsTab({
   runs,
   lang,
   onDelete,
-  deletingId,
+  selectedIds,
+  deletingIds,
+  onToggle,
+  onToggleAll,
+  onDeleteSelected,
 }: {
   runs: RunSummary[];
   lang: Lang;
   onDelete: (reportId: number) => void;
-  deletingId: number | null;
+  selectedIds: number[];
+  deletingIds: number[];
+  onToggle: (reportId: number) => void;
+  onToggleAll: (checked: boolean) => void;
+  onDeleteSelected: () => void;
 }) {
+  const allSelected = runs.length > 0 && selectedIds.length === runs.length;
+  const someSelected = selectedIds.length > 0;
   return (
     <Card className="rounded-lg border-white/80 bg-white shadow-sm">
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center justify-between gap-3 text-base">
           <span>{tx(lang, "历史报告", "Report History")}</span>
-          <span className="text-xs font-normal text-zinc-500">
-            {tx(lang, "本地报告可删除，评级统计会随之更新", "Local reports are deletable; rating summaries update after refresh")}
-          </span>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <span className="text-xs font-normal text-zinc-500">
+              {someSelected
+                ? tx(lang, `已选 ${selectedIds.length} 份，准备清理历史尘埃。`, `${selectedIds.length} selected for cleanup.`)
+                : tx(lang, "本地报告可删除，评级统计会随之更新", "Local reports are deletable; rating summaries update after refresh")}
+            </span>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={!someSelected || deletingIds.length > 0}
+              onClick={onDeleteSelected}
+            >
+              {deletingIds.length > 1 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              {tx(lang, "批量删除", "Delete Selected")}
+            </Button>
+          </div>
         </CardTitle>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
-        <Table className="min-w-[860px]">
+        <Table className="min-w-[940px]">
           <TableHeader>
             <TableRow>
+              <TableHead className="w-10">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={(event) => onToggleAll(event.target.checked)}
+                  aria-label={tx(lang, "选择全部报告", "Select all reports")}
+                  className="h-4 w-4 accent-teal-700"
+                />
+              </TableHead>
               <TableHead>Time</TableHead>
               <TableHead>Symbol</TableHead>
               <TableHead>Company</TableHead>
@@ -1704,6 +2015,15 @@ function ReportsTab({
           <TableBody>
             {runs.map((run) => (
               <TableRow key={run.id}>
+                <TableCell>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(run.id)}
+                    onChange={() => onToggle(run.id)}
+                    aria-label={tx(lang, "选择报告", "Select report")}
+                    className="h-4 w-4 accent-teal-700"
+                  />
+                </TableCell>
                 <TableCell className="font-mono text-xs">{new Date(run.created_at).toLocaleString()}</TableCell>
                 <TableCell className="font-mono font-medium">{run.ticker}</TableCell>
                 <TableCell>{run.company_name || "-"}</TableCell>
@@ -1716,17 +2036,17 @@ function ReportsTab({
                     size="icon"
                     className="h-8 w-8 text-zinc-500 hover:bg-red-50 hover:text-red-600"
                     aria-label={tx(lang, "删除报告", "Delete report")}
-                    disabled={deletingId === run.id}
+                    disabled={deletingIds.includes(run.id)}
                     onClick={() => onDelete(run.id)}
                   >
-                    {deletingId === run.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    {deletingIds.includes(run.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                   </Button>
                 </TableCell>
               </TableRow>
             ))}
             {!runs.length ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-28 text-center text-sm text-zinc-500">
+                <TableCell colSpan={8} className="h-28 text-center text-sm text-zinc-500">
                   {tx(lang, "暂无历史报告。", "No report history yet.")}
                 </TableCell>
               </TableRow>
@@ -1834,6 +2154,62 @@ function RiskSeverityBadge({ severity, lang }: { severity: string; lang: Lang })
     info: tx(lang, "提示", "Info"),
   }[severity] || severity;
   return <Badge className={`rounded-md ${style}`}>{label}</Badge>;
+}
+
+function comparisonInsights(items: SymbolCompareItem[], lang: Lang) {
+  if (!items.length) {
+    return [
+      {
+        label: tx(lang, "估值锚", "Valuation Anchor"),
+        value: tx(lang, "待对比", "Pending"),
+        note: tx(lang, "先选几只股票，别让表格独自思考。", "Pick a few symbols first; tables should not think alone."),
+        className: "border-sky-100 bg-sky-50/70 text-sky-900",
+      },
+      {
+        label: tx(lang, "质量锚", "Quality Anchor"),
+        value: tx(lang, "待对比", "Pending"),
+        note: tx(lang, "ROE、增长和估值要一起看。", "ROE, growth, and valuation belong together."),
+        className: "border-teal-100 bg-teal-50/70 text-teal-900",
+      },
+      {
+        label: tx(lang, "市场温度", "Market Heat"),
+        value: tx(lang, "待对比", "Pending"),
+        note: tx(lang, "涨跌幅只负责提醒，不负责下结论。", "Price change alerts; it does not conclude."),
+        className: "border-amber-100 bg-amber-50/70 text-amber-900",
+      },
+    ];
+  }
+  const cheapest = [...items].filter((item) => item.pe_ratio != null && item.pe_ratio > 0).sort((a, b) => Number(a.pe_ratio) - Number(b.pe_ratio))[0];
+  const quality = [...items].filter((item) => item.roe != null).sort((a, b) => Number(b.roe) - Number(a.roe))[0];
+  const momentum = [...items].filter((item) => item.change_pct != null).sort((a, b) => Number(b.change_pct) - Number(a.change_pct))[0];
+  return [
+    {
+      label: tx(lang, "估值最低", "Lowest PE"),
+      value: cheapest ? `${cheapest.symbol} · PE ${formatNumber(cheapest.pe_ratio)}` : tx(lang, "暂无 PE", "No PE"),
+      note: tx(lang, "便宜不等于好，但值得继续查。", "Cheap is not always good, but it deserves a closer look."),
+      className: "border-sky-100 bg-sky-50/70 text-sky-900",
+    },
+    {
+      label: tx(lang, "质量最高", "Highest ROE"),
+      value: quality ? `${quality.symbol} · ROE ${formatPercent(quality.roe)}` : tx(lang, "暂无 ROE", "No ROE"),
+      note: tx(lang, "好生意通常先在回报率里露头。", "Good businesses often show up first in returns."),
+      className: "border-teal-100 bg-teal-50/70 text-teal-900",
+    },
+    {
+      label: tx(lang, "涨跌最强", "Strongest Move"),
+      value: momentum ? `${momentum.symbol} · ${Number(momentum.change_pct).toFixed(2)}%` : tx(lang, "暂无涨跌", "No change"),
+      note: tx(lang, "热闹归热闹，证据还是要补票。", "Momentum can be loud; evidence still needs a ticket."),
+      className: "border-amber-100 bg-amber-50/70 text-amber-900",
+    },
+  ];
+}
+
+function marketLabel(market: string, lang: Lang) {
+  return {
+    ashare: tx(lang, "A股", "A-share"),
+    hk: tx(lang, "港股", "HK"),
+    us: tx(lang, "美股", "US"),
+  }[market] || market;
 }
 
 function riskCategoryLabel(category: string, lang: Lang = "zh") {
@@ -2018,6 +2394,15 @@ function evidenceTotal(report: ResearchReport | null) {
     evidence.channel_analysis,
     evidence.news,
   ].reduce((total, items) => total + items.length, 0);
+}
+
+function parseSymbolInput(value: string) {
+  return value
+    .split(/[\s,，;；、]+/)
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean)
+    .filter((item, index, array) => array.indexOf(item) === index)
+    .slice(0, 10);
 }
 
 function toNumber(value: unknown): number | null {

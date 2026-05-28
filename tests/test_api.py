@@ -140,6 +140,62 @@ def test_delete_research_run_endpoint(monkeypatch):
     assert missing.status_code == 404
 
 
+def test_batch_delete_research_runs_endpoint(monkeypatch):
+    class FakeRepo:
+        def create_tables(self):
+            return None
+
+        def delete_many(self, report_ids):
+            assert report_ids == [1, 2, 3]
+            return 2
+
+    monkeypatch.setattr("src.api.main._report_repo", lambda: FakeRepo())
+    client = TestClient(app)
+    response = client.post("/api/research/runs/delete", json={"ids": [3, 2, 2, 1]})
+    assert response.status_code == 200
+    assert response.json()["deleted"] == 2
+    assert response.json()["ids"] == [1, 2, 3]
+
+
+def test_symbol_compare_endpoint(monkeypatch):
+    class FakeDal:
+        def get_symbol_profile(self, symbol, period="6mo"):
+            return {
+                "symbol": symbol,
+                "market": "us",
+                "quote": {
+                    "source": "mock_quote",
+                    "payload": [{"symbol": symbol, "name": f"{symbol} Inc", "close": 100, "change_pct": 1.2}],
+                    "stale": False,
+                    "error": None,
+                },
+                "fundamentals": {
+                    "source": "mock_fund",
+                    "payload": {"marketCap": 1000, "trailingPE": 20, "priceToBook": 4, "returnOnEquity": 0.18},
+                    "stale": False,
+                    "error": None,
+                },
+                "history": {"source": "mock_history", "payload": [], "stale": False, "error": None},
+            }
+
+    class FakeRepo:
+        def create_tables(self):
+            return None
+
+        def get_latest(self, symbol, limit=1):
+            return []
+
+    monkeypatch.setattr("src.api.main.get_dal", lambda: FakeDal())
+    monkeypatch.setattr("src.api.main._report_repo", lambda: FakeRepo())
+    client = TestClient(app)
+    response = client.get("/api/symbols/compare?symbols=AAPL,MSFT&period=6mo")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["symbols"] == ["AAPL", "MSFT"]
+    assert data["items"][0]["pe_ratio"] == 20
+    assert data["items"][0]["data_sources"]["quote"] == "mock_quote"
+
+
 def test_symbol_risk_alert_endpoint(monkeypatch):
     monkeypatch.setattr("src.api.main.evaluate_symbol_risk", lambda symbol, period="6mo": [])
     client = TestClient(app)

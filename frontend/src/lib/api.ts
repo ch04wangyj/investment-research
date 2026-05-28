@@ -170,6 +170,41 @@ export type SymbolProfile = {
   history: { payload?: HistoryPoint[]; source?: string; as_of?: string; stale?: boolean; error?: string | null };
 };
 
+export type SymbolCompareItem = {
+  symbol: string;
+  market: "ashare" | "hk" | "us" | string;
+  company_name: string;
+  currency?: string | null;
+  price?: number | null;
+  change_pct?: number | null;
+  volume?: number | null;
+  market_cap?: number | null;
+  pe_ratio?: number | null;
+  pb_ratio?: number | null;
+  roe?: number | null;
+  roa?: number | null;
+  revenue_growth?: number | null;
+  rating?: string | null;
+  confidence?: string | null;
+  thesis?: string | null;
+  latest_report_at?: string | null;
+  data_sources: {
+    quote?: string | null;
+    fundamentals?: string | null;
+    history?: string | null;
+    report?: string | null;
+  };
+  stale: boolean;
+  errors: string[];
+};
+
+export type SymbolComparison = {
+  generated_at: string;
+  period: string;
+  symbols: string[];
+  items: SymbolCompareItem[];
+};
+
 export type SectorSummary = {
   sector: string;
   count: number;

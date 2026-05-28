@@ -1,6 +1,7 @@
 """FastAPI application exposing market data, symbols, models, and research runs."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -49,6 +50,10 @@ class SymbolCreate(BaseModel):
     name: str | None = None
     exchange: str | None = None
     sector: str = ""
+
+
+class ReportDeleteRequest(BaseModel):
+    ids: list[int]
 
 
 class AssistantRequest(BaseModel):
@@ -184,6 +189,58 @@ def add_symbol(payload: SymbolCreate) -> dict[str, Any]:
     return {"symbol": normalized, "status": "active"}
 
 
+@app.get("/api/symbols/compare")
+def compare_symbols(symbols: str, period: str = "6mo") -> dict[str, Any]:
+    raw_symbols = [
+        part.strip().upper()
+        for chunk in symbols.splitlines()
+        for part in chunk.replace("，", ",").replace("、", ",").replace(";", ",").split(",")
+        if part.strip()
+    ]
+    normalized_symbols = []
+    for item in raw_symbols:
+        normalized = normalize_symbol(item)
+        if normalized not in normalized_symbols:
+            normalized_symbols.append(normalized)
+    normalized_symbols = normalized_symbols[:10]
+    if len(normalized_symbols) < 2:
+        raise HTTPException(status_code=400, detail="At least two symbols are required")
+
+    dal = get_dal()
+    profiles: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=min(6, len(normalized_symbols))) as executor:
+        future_map = {
+            executor.submit(dal.get_symbol_profile, symbol, period): symbol
+            for symbol in normalized_symbols
+        }
+        for future in as_completed(future_map):
+            symbol = future_map[future]
+            try:
+                profiles[symbol] = future.result()
+            except Exception as exc:
+                profiles[symbol] = {
+                    "symbol": symbol,
+                    "market": detect_market(symbol),
+                    "quote": {"error": str(exc), "payload": []},
+                    "fundamentals": {"error": str(exc), "payload": {}},
+                    "history": {"error": str(exc), "payload": []},
+                }
+
+    report_repo = _report_repo()
+    items = []
+    for symbol in normalized_symbols:
+        latest_rows = report_repo.get_latest(symbol, limit=1)
+        latest_report = latest_rows[0] if latest_rows else None
+        items.append(build_compare_item(profiles[symbol], latest_report))
+
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "period": period,
+        "symbols": normalized_symbols,
+        "items": items,
+    }
+
+
 @app.get("/api/symbols/{symbol}")
 def symbol_profile(symbol: str, period: str = "6mo") -> dict[str, Any]:
     normalized = normalize_symbol(symbol)
@@ -215,6 +272,15 @@ def delete_research_run(report_id: int) -> dict[str, Any]:
     if not deleted:
         raise HTTPException(status_code=404, detail="Research report not found")
     return {"status": "deleted", "id": report_id}
+
+
+@app.post("/api/research/runs/delete")
+def delete_research_runs(payload: ReportDeleteRequest) -> dict[str, Any]:
+    ids = sorted({int(report_id) for report_id in payload.ids if int(report_id) > 0})
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids are required")
+    deleted = _report_repo().delete_many(ids)
+    return {"status": "deleted", "requested": len(ids), "deleted": deleted, "ids": ids}
 
 
 @app.get("/api/research/daily-reads")
@@ -370,6 +436,104 @@ def serialize_report_summary(row) -> dict[str, Any]:
         "trigger_type": row.trigger_type,
         "company_name": content.get("company_name"),
     }
+
+
+def build_compare_item(profile: dict[str, Any], latest_report) -> dict[str, Any]:
+    symbol = str(profile.get("symbol") or "")
+    quote_result = profile.get("quote", {}) or {}
+    fundamentals_result = profile.get("fundamentals", {}) or {}
+    history_result = profile.get("history", {}) or {}
+    quote = _first_payload(quote_result.get("payload"))
+    fundamentals = fundamentals_result.get("payload") or {}
+    if not isinstance(fundamentals, dict):
+        fundamentals = {}
+    raw_content = latest_report.content if latest_report else {}
+    content = raw_content if isinstance(raw_content, dict) else {}
+    key_metrics = content.get("key_metrics", {})
+    company_name = (
+        content.get("company_name")
+        or quote.get("name")
+        or fundamentals.get("name")
+        or fundamentals.get("shortName")
+        or symbol
+    )
+    errors = [
+        str(result.get("error"))
+        for result in [quote_result, fundamentals_result, history_result]
+        if result.get("error")
+    ]
+    return {
+        "symbol": symbol,
+        "market": profile.get("market") or detect_market(symbol),
+        "company_name": company_name,
+        "currency": quote.get("currency") or fundamentals.get("currency"),
+        "price": _first_number(quote.get("close"), quote.get("price"), key_metrics.get("current_price")),
+        "change_pct": _first_number(quote.get("change_pct"), quote.get("pct_chg")),
+        "volume": _first_number(quote.get("volume")),
+        "market_cap": _first_number(
+            key_metrics.get("market_cap"),
+            fundamentals.get("market_cap"),
+            fundamentals.get("marketCap"),
+            fundamentals.get("总市值"),
+        ),
+        "pe_ratio": _first_number(
+            key_metrics.get("pe_ratio"),
+            fundamentals.get("pe_ratio"),
+            fundamentals.get("trailingPE"),
+            fundamentals.get("市盈率"),
+        ),
+        "pb_ratio": _first_number(
+            key_metrics.get("pb_ratio"),
+            fundamentals.get("pb_ratio"),
+            fundamentals.get("priceToBook"),
+            fundamentals.get("市净率"),
+        ),
+        "roe": _first_number(key_metrics.get("roe"), fundamentals.get("roe"), fundamentals.get("returnOnEquity")),
+        "roa": _first_number(key_metrics.get("roa"), fundamentals.get("roa"), fundamentals.get("returnOnAssets")),
+        "revenue_growth": _first_number(
+            key_metrics.get("revenue_growth"),
+            fundamentals.get("revenue_growth"),
+            fundamentals.get("revenueGrowth"),
+        ),
+        "rating": content.get("rating") if isinstance(content, dict) else None,
+        "confidence": content.get("confidence") if isinstance(content, dict) else None,
+        "thesis": content.get("thesis") if isinstance(content, dict) else None,
+        "latest_report_at": latest_report.created_at.isoformat() if latest_report and latest_report.created_at else None,
+        "data_sources": {
+            "quote": quote_result.get("source"),
+            "fundamentals": fundamentals_result.get("source"),
+            "history": history_result.get("source"),
+            "report": latest_report.agent_name if latest_report else None,
+        },
+        "stale": bool(quote_result.get("stale") or fundamentals_result.get("stale") or history_result.get("stale")),
+        "errors": errors,
+    }
+
+
+def _first_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, list):
+        for row in payload:
+            if isinstance(row, dict):
+                return row
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _first_number(*values: Any) -> float | None:
+    for value in values:
+        if isinstance(value, bool) or value is None:
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            normalized = value.replace(",", "").replace("%", "").strip()
+            if not normalized or normalized in {"-", "--", "None", "nan"}:
+                continue
+            try:
+                return float(normalized)
+            except ValueError:
+                continue
+    return None
 
 
 def build_sector_summary(symbols, quotes: list[dict[str, Any]]) -> list[dict[str, Any]]:

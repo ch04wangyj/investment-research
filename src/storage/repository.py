@@ -124,6 +124,17 @@ class AgentReportRepository(Repository):
             session.commit()
             return bool(result.rowcount)
 
+    def delete_many(self, report_ids: Sequence[int]) -> int:
+        ids = [int(report_id) for report_id in report_ids if int(report_id) > 0]
+        if not ids:
+            return 0
+        with self.get_session() as session:
+            result = session.execute(
+                delete(AgentReport).where(AgentReport.id.in_(ids))
+            )
+            session.commit()
+            return int(result.rowcount or 0)
+
 
 class TrackedSymbolRepository(Repository):
     """Operations on tracked_symbols table."""
