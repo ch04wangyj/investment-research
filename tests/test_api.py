@@ -99,6 +99,47 @@ def test_strategy_research_endpoint(monkeypatch):
     assert response.json()["principles"] == ["research first"]
 
 
+def test_daily_reads_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        "src.api.main.collect_daily_reads",
+        lambda max_items_per_section=5: {
+            "generated_at": "2026-01-01T00:00:00",
+            "reading_protocol": ["macro first"],
+            "sections": [{"id": "macro_strategy", "title": "Daily", "description": "", "items": []}],
+        },
+    )
+    client = TestClient(app)
+    response = client.get("/api/research/daily-reads?limit=2")
+    assert response.status_code == 200
+    assert response.json()["reading_protocol"] == ["macro first"]
+
+
+def test_workflow_blueprint_endpoint():
+    client = TestClient(app)
+    response = client.get("/api/workflow/blueprint")
+    assert response.status_code == 200
+    data = response.json()
+    assert {item["framework"] for item in data["comparisons"]} >= {"TradingAgents", "FinRobot", "OpenBB"}
+
+
+def test_delete_research_run_endpoint(monkeypatch):
+    class FakeRepo:
+        def create_tables(self):
+            return None
+
+        def delete_by_id(self, report_id):
+            return report_id == 1
+
+    monkeypatch.setattr("src.api.main._report_repo", lambda: FakeRepo())
+    client = TestClient(app)
+    response = client.delete("/api/research/runs/1")
+    assert response.status_code == 200
+    assert response.json() == {"status": "deleted", "id": 1}
+
+    missing = client.delete("/api/research/runs/2")
+    assert missing.status_code == 404
+
+
 def test_symbol_risk_alert_endpoint(monkeypatch):
     monkeypatch.setattr("src.api.main.evaluate_symbol_risk", lambda symbol, period="6mo": [])
     client = TestClient(app)

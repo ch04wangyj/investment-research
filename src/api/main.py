@@ -16,7 +16,9 @@ from src.data.dal import detect_market, get_dal, normalize_symbol
 from src.data.indices import fetch_all_indices
 from src.data.news_fetcher import fetch_financial_news
 from src.research.schemas import ResearchRequest
+from src.research.daily_reads import collect_daily_reads
 from src.research.strategy_research import collect_strategy_research
+from src.research.workflow_blueprint import workflow_blueprint
 from src.research.pdf_export import render_research_pdf
 from src.risk.alerts import evaluate_market_risks, evaluate_symbol_risk, summarize_alerts
 from src.storage.repository import AgentReportRepository, TrackedSymbolRepository
@@ -137,6 +139,11 @@ def strategy_research(limit: int = 6) -> dict[str, Any]:
     return collect_strategy_research(max_items_per_section=max(1, min(limit, 12)))
 
 
+@app.get("/api/workflow/blueprint")
+def workflow_design_blueprint() -> dict[str, Any]:
+    return workflow_blueprint()
+
+
 @app.get("/api/risk/alerts")
 def risk_alerts(limit: int = 12, period: str = "6mo") -> dict[str, Any]:
     symbols = _symbol_repo().get_active()
@@ -200,6 +207,19 @@ def remove_symbol(symbol: str) -> dict[str, Any]:
 def research_runs(limit: int = 50) -> dict[str, Any]:
     rows = _report_repo().list_recent(limit=limit)
     return {"runs": [serialize_report_summary(row) for row in rows]}
+
+
+@app.delete("/api/research/runs/{report_id}")
+def delete_research_run(report_id: int) -> dict[str, Any]:
+    deleted = _report_repo().delete_by_id(report_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Research report not found")
+    return {"status": "deleted", "id": report_id}
+
+
+@app.get("/api/research/daily-reads")
+def research_daily_reads(limit: int = 5) -> dict[str, Any]:
+    return collect_daily_reads(max_items_per_section=max(1, min(limit, 10)))
 
 
 @app.get("/api/research/{symbol}")

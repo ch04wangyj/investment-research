@@ -116,6 +116,14 @@ class AgentReportRepository(Repository):
                 .limit(limit)
             ).scalars().all())
 
+    def delete_by_id(self, report_id: int) -> bool:
+        with self.get_session() as session:
+            result = session.execute(
+                delete(AgentReport).where(AgentReport.id == report_id)
+            )
+            session.commit()
+            return bool(result.rowcount)
+
 
 class TrackedSymbolRepository(Repository):
     """Operations on tracked_symbols table."""

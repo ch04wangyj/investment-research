@@ -220,10 +220,69 @@ export type StrategyResearch = {
   sections: StrategyResearchSection[];
 };
 
+export type DailyReadItem = {
+  title: string;
+  summary: string;
+  url: string;
+  source: string;
+  quality: string;
+  query: string;
+  score: number;
+  as_of: string;
+  tags: string[];
+  reading_time_min: number;
+  why_read: string;
+};
+
+export type DailyReadSection = {
+  id: string;
+  title: string;
+  description: string;
+  items: DailyReadItem[];
+};
+
+export type DailyReads = {
+  generated_at: string;
+  reading_protocol: string[];
+  sections: DailyReadSection[];
+};
+
+export type WorkflowComparison = {
+  framework: string;
+  observed_pattern: string;
+  adopted_improvement: string;
+  risk_control: string;
+};
+
+export type WorkflowStage = {
+  stage: string;
+  goal: string;
+  latency_strategy: string;
+};
+
+export type WorkflowBlueprint = {
+  generated_at: string;
+  positioning: string;
+  comparisons: WorkflowComparison[];
+  workflow: WorkflowStage[];
+  next_actions: string[];
+};
+
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `${response.status} ${response.statusText}`);
   }
   return response.json();
 }
