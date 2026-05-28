@@ -14,11 +14,9 @@ dependencies = [
     "yfinance>=0.2.50",
     # Storage (Phase 1)
     "sqlalchemy>=2.0.0",
-    # Dashboard
+    # Web API
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-    "streamlit>=1.40.0",
-    "plotly>=5.24.0",
     # Config & validation
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",

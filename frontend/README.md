@@ -2,6 +2,14 @@
 
 Next.js App Router UI for the local AI investment research API.
 
+From the repository root, use:
+
+```powershell
+.\start_workbench.bat
+```
+
+Frontend-only startup:
+
 ```powershell
 npm install
 npm run dev

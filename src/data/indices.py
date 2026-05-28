@@ -10,7 +10,7 @@ Each source is cached independently; failure in one market does not block others
 from datetime import datetime
 from typing import Any
 
-import streamlit as st
+from src.data.cache import get_cache
 
 # ── Index definitions ──
 
@@ -205,7 +205,6 @@ def _fetch_us_indices() -> list[dict]:
 
 # ── Combined fetcher ──
 
-@st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_indices() -> list[dict]:
     """Fetch all market indices. Each market fails independently.
 
@@ -213,6 +212,12 @@ def fetch_all_indices() -> list[dict]:
         List of index dicts with keys:
         code, name, name_en, price, change, change_pct, market, source, timestamp
     """
+    cache_key = "market:indices:all"
+    cache = get_cache()
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     results: list[dict] = []
 
     for fetcher, label in [
@@ -225,5 +230,12 @@ def fetch_all_indices() -> list[dict]:
         except Exception:
             # Graceful degradation: skip failed market
             pass
+
+    if results:
+        cache.set(cache_key, results, ttl_seconds=300)
+    else:
+        stale = cache.get_stale(cache_key)
+        if stale is not None:
+            return stale
 
     return results

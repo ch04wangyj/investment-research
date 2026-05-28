@@ -63,11 +63,15 @@ def main():
     print("\n" + "=" * 60)
     print("  Setup complete!")
     print("=" * 60)
-    print(f"""
+    print("""
 Next steps:
   1. Edit .env and add your DEEPSEEK_API_KEY
   2. Test analysis:  python scripts/run_analysis.py 600519
-  3. Launch dashboard: python scripts/run_dashboard.py
+  3. Launch workbench: .\\start_workbench.bat
+
+Manual startup:
+  - API:      python scripts/run_api.py
+  - Frontend: cd frontend && npm run dev
 """)
 
 

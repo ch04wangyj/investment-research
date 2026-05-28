@@ -1,6 +1,5 @@
 @echo off
-cd /d "E:\ClaudeCode\workspace\investment-research"
-call C:\Users\wang_2004\anaconda3\Scripts\activate.bat invest
+cd /d "%~dp0"
 
 if "%1"=="" (
     echo Usage: 快速分析.bat TICKER
