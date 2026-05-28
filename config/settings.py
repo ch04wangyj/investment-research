@@ -84,12 +84,12 @@ class Settings(BaseSettings):
     enable_deepseek_thinking: bool = False
 
     # LLM - Deep Thinking
-    deep_model: str = "deepseek-chat"
+    deep_model: str = "deepseek-v4-pro"
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com/v1"
 
     # LLM - Quick Thinking
-    quick_model: str = "deepseek-chat"
+    quick_model: str = "deepseek-v4-pro"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     openrouter_api_key: str = ""
