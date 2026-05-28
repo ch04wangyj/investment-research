@@ -7,16 +7,20 @@ import {
   Bell,
   Bot,
   Brain,
+  BookOpen,
   CalendarClock,
   ChevronDown,
   ChevronUp,
   CheckCircle2,
   ClipboardList,
   Database,
+  Download,
+  ExternalLink,
   FileText,
   FolderOpen,
   Gauge,
   Layers3,
+  Languages,
   Loader2,
   MessageSquareText,
   Newspaper,
@@ -49,9 +53,12 @@ import {
   type RiskAlert,
   type RiskSummary,
   type SectorSummary,
+  type StrategyResearch,
   type SymbolItem,
   type SymbolProfile,
 } from "@/lib/api";
+
+type Lang = "zh" | "en";
 
 type Health = {
   status: string;
@@ -74,6 +81,11 @@ type RiskResponse = {
   market?: string;
   alerts: RiskAlert[];
   summary: RiskSummary;
+};
+
+type NewsResponse = {
+  symbol?: string | null;
+  items: Array<Record<string, unknown>>;
 };
 
 type RunSummary = {
@@ -113,9 +125,11 @@ export function Workbench() {
   const [stockSearch, setStockSearch] = useState("");
   const [sectorFilter, setSectorFilter] = useState("all");
   const [ratingFilter, setRatingFilter] = useState("all");
+  const [lang, setLang] = useState<Lang>("zh");
   const [assistantMessages, setAssistantMessages] = useState<string[]>([]);
   const [riskAlerts, setRiskAlerts] = useState<RiskAlert[]>([]);
   const [riskSummary, setRiskSummary] = useState<RiskSummary>(defaultRiskSummary);
+  const [strategyResearch, setStrategyResearch] = useState<StrategyResearch | null>(null);
   const [report, setReport] = useState<ResearchReport | null>(null);
   const [profile, setProfile] = useState<SymbolProfile | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -150,8 +164,14 @@ export function Workbench() {
     }
     setLoading(false);
 
+    apiGet<NewsResponse>("/api/news?limit=40")
+      .then((response) => setOverview((current) => ({ ...current, news: response.items })))
+      .catch(() => undefined);
+    apiGet<StrategyResearch>("/api/strategy/research?limit=6")
+      .then(setStrategyResearch)
+      .catch(() => undefined);
     apiGet<Overview>("/api/market/overview")
-      .then(setOverview)
+      .then((next) => setOverview((current) => ({ ...next, news: current.news.length ? current.news : next.news })))
       .catch((err) => {
         setError(`市场概览加载较慢或失败：${err instanceof Error ? err.message : String(err)}`);
       });
@@ -194,6 +214,7 @@ export function Workbench() {
           provider_id: providerId,
           use_llm: useLlm,
           period,
+          language: lang,
         }),
         apiGet<SymbolProfile>(`/api/symbols/${clean}?period=${period}`).catch(() => null),
       ]);
@@ -234,6 +255,7 @@ export function Workbench() {
         use_llm: useLlm,
         period,
         question,
+        language: lang,
       });
       setAssistantMessages(response.messages);
       if (response.report) {
@@ -285,22 +307,30 @@ export function Workbench() {
           <div>
             <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-zinc-500">
               <Sparkles className="h-3.5 w-3.5" />
-              Evidence-first AI Research Workbench
+              {tx(lang, "Evidence-first AI Research Workbench", "Evidence-first AI Research Workbench")}
             </div>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-950 md:text-3xl">
-              AI 深度研报工作台
+              {tx(lang, "AI 深度研报工作台", "AI Research Workbench")}
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-600">
-              先快速收集宏观、公告/年报、公开研报线索、新闻与渠道观点，再生成可追溯的机构风格研报。
+              {tx(
+                lang,
+                "先快速收集宏观、公告/年报、公开研报线索、新闻与渠道观点，再生成可追溯的机构风格研报。",
+                "Rapidly collect macro context, filings, public report leads, news, and market views before producing an auditable institutional-style report.",
+              )}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={health?.status === "ok" ? "default" : "secondary"} className="h-8 rounded-md px-3">
               {health?.status === "ok" ? "API Online" : "API Pending"}
             </Badge>
+            <Button variant="outline" size="sm" onClick={() => setLang((value) => (value === "zh" ? "en" : "zh"))}>
+              <Languages className="mr-2 h-4 w-4" />
+              {lang === "zh" ? "EN" : "中"}
+            </Button>
             <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
               <RefreshCw className="mr-2 h-4 w-4" />
-              Refresh
+              {tx(lang, "刷新", "Refresh")}
             </Button>
             <Button
               variant="outline"
@@ -318,26 +348,28 @@ export function Workbench() {
             <AlertCircle className="h-4 w-4" />
             <AlertTitle>运行提示</AlertTitle>
             <AlertDescription>
-              {error}。确认后端已启动：<code className="rounded bg-white px-1 py-0.5">python scripts/run_api.py</code>
+              {error}。{tx(lang, "确认后端已启动", "Confirm the backend is running")}：
+              <code className="rounded bg-white px-1 py-0.5">python scripts/run_api.py</code>
             </AlertDescription>
           </Alert>
         ) : null}
 
-        <section className="grid gap-4 md:grid-cols-5">
-          <MetricCard icon={<Gauge />} label="Tracked Symbols" value={overview.watchlist.length} />
-          <MetricCard icon={<Database />} label="Data Routes" value={providerCount} />
-          <MetricCard icon={<FileText />} label="Research Runs" value={runs.length} />
-          <MetricCard icon={<ShieldAlert />} label="Risk Alerts" value={activeRiskCount} />
-          <MetricCard icon={<Activity />} label="API Version" value={health?.version || "0.2.0"} />
+        <section className="grid items-stretch gap-4 md:grid-cols-5">
+          <MetricCard icon={<Gauge />} label={tx(lang, "跟踪股票", "Tracked Symbols")} value={overview.watchlist.length} />
+          <MetricCard icon={<Database />} label={tx(lang, "数据路由", "Data Routes")} value={providerCount} />
+          <MetricCard icon={<FileText />} label={tx(lang, "研报记录", "Research Runs")} value={runs.length} />
+          <MetricCard icon={<ShieldAlert />} label={tx(lang, "风险提醒", "Risk Alerts")} value={activeRiskCount} />
+          <MetricCard icon={<Activity />} label={tx(lang, "API版本", "API Version")} value={health?.version || "0.2.0"} />
         </section>
 
         <Tabs defaultValue="research" className="space-y-5">
-          <TabsList className="grid h-auto w-full grid-cols-2 rounded-lg bg-white p-1 shadow-sm md:w-[780px] md:grid-cols-5">
-            <TabsTrigger value="research">研报工作台</TabsTrigger>
-            <TabsTrigger value="evidence">资料目录</TabsTrigger>
-            <TabsTrigger value="universe">股票池</TabsTrigger>
-            <TabsTrigger value="risk">风险提醒</TabsTrigger>
-            <TabsTrigger value="reports">报告历史</TabsTrigger>
+          <TabsList className="grid h-auto w-full grid-cols-2 rounded-lg bg-white p-1 shadow-sm md:w-[940px] md:grid-cols-6">
+            <TabsTrigger value="research">{tx(lang, "研报工作台", "Research")}</TabsTrigger>
+            <TabsTrigger value="evidence">{tx(lang, "资料目录", "Evidence")}</TabsTrigger>
+            <TabsTrigger value="strategy">{tx(lang, "策略方法", "Methods")}</TabsTrigger>
+            <TabsTrigger value="universe">{tx(lang, "股票池", "Universe")}</TabsTrigger>
+            <TabsTrigger value="risk">{tx(lang, "风险提醒", "Risk")}</TabsTrigger>
+            <TabsTrigger value="reports">{tx(lang, "报告历史", "Reports")}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="research" className="space-y-5">
@@ -358,11 +390,16 @@ export function Workbench() {
               assistantMessages={assistantMessages}
               report={report}
               profile={profile}
+              lang={lang}
             />
           </TabsContent>
 
           <TabsContent value="evidence" className="space-y-5">
-            <EvidenceLibraryTab report={report} overview={overview} />
+            <EvidenceLibraryTab report={report} overview={overview} lang={lang} />
+          </TabsContent>
+
+          <TabsContent value="strategy" className="space-y-5">
+            <StrategyResearchTab research={strategyResearch} lang={lang} onRefresh={refresh} loading={loading} />
           </TabsContent>
 
           <TabsContent value="universe" className="space-y-5">
@@ -381,6 +418,7 @@ export function Workbench() {
               onAnalyze={(item) => {
                 void runResearch(item.symbol);
               }}
+              lang={lang}
             />
           </TabsContent>
 
@@ -395,15 +433,16 @@ export function Workbench() {
               onSelect={(next) => void selectSymbol(next)}
               onRefresh={(next) => void refreshRisk(next)}
               onRefreshAll={() => void refreshRisk()}
+              lang={lang}
             />
           </TabsContent>
 
           <TabsContent value="reports">
-            <ReportsTab runs={runs} />
+            <ReportsTab runs={runs} lang={lang} />
           </TabsContent>
         </Tabs>
 
-        {showSettings ? <SettingsTab health={health} providers={providers} /> : null}
+        {showSettings ? <SettingsTab health={health} providers={providers} lang={lang} /> : null}
       </div>
     </main>
   );
@@ -411,7 +450,7 @@ export function Workbench() {
 
 function MetricCard({ icon, label, value }: { icon: ReactNode; label: string; value: string | number }) {
   return (
-    <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+    <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
       <CardContent className="flex items-center justify-between p-5">
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">{label}</p>
@@ -423,20 +462,20 @@ function MetricCard({ icon, label, value }: { icon: ReactNode; label: string; va
   );
 }
 
-function NewsDirectory({ items }: { items: Array<Record<string, unknown>> }) {
+function NewsDirectory({ items, lang }: { items: Array<Record<string, unknown>>; lang: Lang }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
   const filtered = items.filter((item) => filter === "all" || newsCategory(item) === filter);
   const filters = [
-    ["all", "全部"],
-    ["policy", "政策"],
-    ["earnings", "财报"],
-    ["macro", "宏观"],
-    ["market", "市场"],
+    ["all", tx(lang, "全部", "All")],
+    ["policy", tx(lang, "政策", "Policy")],
+    ["earnings", tx(lang, "财报", "Earnings")],
+    ["macro", tx(lang, "宏观", "Macro")],
+    ["market", tx(lang, "市场", "Market")],
   ];
 
   if (!items.length) {
-    return <div className="rounded-lg border border-dashed bg-zinc-50 p-6 text-sm text-zinc-500">暂无新闻流。</div>;
+    return <div className="rounded-lg border border-dashed bg-zinc-50 p-6 text-sm text-zinc-500">{tx(lang, "暂无新闻流。", "No news feed yet.")}</div>;
   }
 
   return (
@@ -466,14 +505,14 @@ function NewsDirectory({ items }: { items: Array<Record<string, unknown>> }) {
                 <span>
                   <span className="line-clamp-2 text-sm font-medium text-zinc-950">{String(item.title || "Untitled")}</span>
                   <span className="mt-1 block text-xs text-zinc-500">
-                    {riskCategoryLabel(newsCategory(item))} · {String(item.display_time || item.source || "")}
+                    {riskCategoryLabel(newsCategory(item), lang)} · {String(item.source_channel || item.source || "news")} · {String(item.display_time || "")}
                   </span>
                 </span>
                 {open ? <ChevronUp className="mt-1 h-4 w-4 shrink-0 text-zinc-500" /> : <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-zinc-500" />}
               </button>
               {open ? (
                 <div className="border-t px-3 py-3 text-sm leading-6 text-zinc-700">
-                  <p>{String(item.summary || "无摘要")}</p>
+                  <p>{String(item.summary || tx(lang, "无摘要", "No summary"))}</p>
                   <div className="mt-3 flex items-center justify-between gap-3">
                     <Badge variant="secondary" className="rounded-md">{String(item.source || "news")}</Badge>
                     {item.url ? (
@@ -483,7 +522,7 @@ function NewsDirectory({ items }: { items: Array<Record<string, unknown>> }) {
                         rel="noreferrer"
                         className="text-xs font-medium text-blue-600 hover:text-blue-700"
                       >
-                        打开原文
+                        {tx(lang, "打开原文", "Open source")}
                       </a>
                     ) : null}
                   </div>
@@ -497,50 +536,54 @@ function NewsDirectory({ items }: { items: Array<Record<string, unknown>> }) {
   );
 }
 
-function EvidenceLibraryTab({ report, overview }: { report: ResearchReport | null; overview: Overview }) {
+function EvidenceLibraryTab({ report, overview, lang }: { report: ResearchReport | null; overview: Overview; lang: Lang }) {
   const evidence = report?.research_evidence;
   return (
-    <section className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+    <section className="grid items-start gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <FolderOpen className="h-4 w-4" />
-            {report ? `${report.symbol} 公开资料目录` : "公开资料目录"}
+            {report ? `${report.symbol} ${tx(lang, "公开资料目录", "Evidence Book")}` : tx(lang, "公开资料目录", "Evidence Book")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
           {report ? (
             <>
-              <EvidenceGroup title="公告 / 年报 / 监管披露" items={evidence?.filings || []} />
-              <EvidenceGroup title="公开机构研报线索" items={evidence?.institutional_reports || []} />
-              <EvidenceGroup title="宏观与政策背景" items={evidence?.macro || []} />
-              <EvidenceGroup title="渠道观点与新闻共识" items={[...(evidence?.channel_analysis || []), ...(evidence?.news || [])]} />
-              {evidence?.errors?.length ? <InfoList title="检索问题" items={evidence.errors} tone="warning" /> : null}
+              <EvidenceGroup title={tx(lang, "公告 / 年报 / 监管披露", "Filings / Annual Reports / Disclosures")} items={evidence?.filings || []} lang={lang} />
+              <EvidenceGroup title={tx(lang, "公开机构研报线索", "Public Institutional Report Leads")} items={evidence?.institutional_reports || []} lang={lang} />
+              <EvidenceGroup title={tx(lang, "宏观与政策背景", "Macro And Policy Context")} items={evidence?.macro || []} lang={lang} />
+              <EvidenceGroup title={tx(lang, "渠道观点与新闻共识", "Channel Views And News")} items={[...(evidence?.channel_analysis || []), ...(evidence?.news || [])]} lang={lang} />
+              {evidence?.errors?.length ? <InfoList title={tx(lang, "检索问题", "Search Issues")} items={evidence.errors} tone="warning" lang={lang} /> : null}
             </>
           ) : (
             <div className="rounded-lg border border-dashed bg-zinc-50 p-6 text-sm leading-6 text-zinc-500">
-              先在研报工作台生成一份报告，这里会展开公告/年报、公开研报线索、宏观政策和渠道分析目录。
+              {tx(
+                lang,
+                "先在研报工作台生成一份报告，这里会展开公告/年报、公开研报线索、宏观政策和渠道分析目录。",
+                "Generate a report first. Filings, public research leads, macro context, and channel analysis will appear here.",
+              )}
             </div>
           )}
         </CardContent>
       </Card>
 
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Newspaper className="h-4 w-4" />
-            新闻与政策目录
+            {tx(lang, "新闻与政策目录", "News And Policy Directory")}
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <NewsDirectory items={overview.news} />
+          <NewsDirectory items={overview.news} lang={lang} />
         </CardContent>
       </Card>
     </section>
   );
 }
 
-function EvidenceGroup({ title, items }: { title: string; items: EvidenceItem[] }) {
+function EvidenceGroup({ title, items, lang }: { title: string; items: EvidenceItem[]; lang: Lang }) {
   return (
     <div className="rounded-lg border bg-zinc-50 p-3">
       <div className="flex items-center justify-between gap-3">
@@ -558,14 +601,112 @@ function EvidenceGroup({ title, items }: { title: string; items: EvidenceItem[] 
           >
             <span className="line-clamp-2 font-medium">{item.title || "Untitled source"}</span>
             <span className="mt-1 block text-xs text-zinc-500">
-              {sourceQualityLabel(item.quality)} · {item.source || "source"} · score {Math.round(item.score)}
+              {sourceQualityLabel(item.quality, lang)} · {item.source || "source"} · score {Math.round(item.score)}
             </span>
             {item.summary ? <span className="mt-2 line-clamp-2 block text-xs leading-5 text-zinc-600">{item.summary}</span> : null}
           </a>
         ))}
-        {!items.length ? <p className="rounded-md bg-white px-3 py-2 text-xs text-zinc-500">暂无可用来源，报告会降低置信度。</p> : null}
+        {!items.length ? <p className="rounded-md bg-white px-3 py-2 text-xs text-zinc-500">{tx(lang, "暂无可用来源，报告会降低置信度。", "No available source; confidence will be reduced.")}</p> : null}
       </div>
     </div>
+  );
+}
+
+function StrategyResearchTab({
+  research,
+  lang,
+  onRefresh,
+  loading,
+}: {
+  research: StrategyResearch | null;
+  lang: Lang;
+  onRefresh: () => void;
+  loading: boolean;
+}) {
+  return (
+    <section className="grid items-start gap-5 lg:grid-cols-[0.7fr_1.3fr]">
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <BookOpen className="h-4 w-4" />
+            {tx(lang, "价值投资 / 策略方法库", "Value Investing / Strategy Library")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm leading-6 text-zinc-600">
+            {tx(
+              lang,
+              "该模块只沉淀方法、前沿论文和市场观点，不直接给出买卖点。个股研报仍优先关注宏观、公司基本面、估值和证据链。",
+              "This module stores methods, frontier papers, and market views rather than direct trading signals. Stock reports still prioritize macro context, fundamentals, valuation, and auditable evidence.",
+            )}
+          </p>
+          <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            {tx(lang, "刷新方法库", "Refresh Library")}
+          </Button>
+          <div className="space-y-2">
+            {(research?.principles || [
+              tx(lang, "先理解商业模式、资本回报和估值区间，再考虑交易策略。", "Understand business quality, returns on capital, and valuation before strategy."),
+              tx(lang, "前沿论文必须经过样本外稳健性和交易成本审查。", "Frontier papers need out-of-sample robustness and cost checks."),
+            ]).map((item) => (
+              <Bullet key={item} tone="positive" text={item} />
+            ))}
+          </div>
+          <p className="text-xs text-zinc-500">
+            {tx(lang, "更新时间", "Updated at")}: {research?.generated_at ? new Date(research.generated_at).toLocaleString() : "-"}
+          </p>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-5">
+        {(research?.sections || []).map((section) => (
+          <Card key={section.id} className="rounded-lg border-white/80 bg-white shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base">
+                <span>{strategySectionTitle(section.id, section.title, lang)}</span>
+                <Badge variant="secondary" className="rounded-md">{section.items.length}</Badge>
+              </CardTitle>
+              <p className="text-sm leading-6 text-zinc-500">{strategySectionDescription(section.id, section.description, lang)}</p>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-2">
+              {section.items.length ? section.items.map((item) => (
+                <a
+                  key={`${section.id}-${item.url}-${item.title}`}
+                  href={item.url || "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group flex min-h-36 flex-col rounded-lg border bg-zinc-50 p-4 transition hover:border-zinc-400 hover:bg-white"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-950">{item.title || "Untitled"}</p>
+                    <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400 group-hover:text-zinc-800" />
+                  </div>
+                  <p className="mt-2 line-clamp-3 text-xs leading-5 text-zinc-600">{item.summary || tx(lang, "暂无摘要", "No summary")}</p>
+                  <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">
+                    <Badge variant="secondary" className="rounded-md">{sourceQualityLabel(item.quality, lang)}</Badge>
+                    <span className="text-xs text-zinc-500">{item.source}</span>
+                    {item.method_tags.slice(0, 2).map((tag) => (
+                      <span key={tag} className="rounded-md bg-white px-2 py-1 text-[11px] text-zinc-500">{tag}</span>
+                    ))}
+                  </div>
+                </a>
+              )) : (
+                <div className="rounded-lg border border-dashed bg-zinc-50 p-6 text-sm text-zinc-500">
+                  {tx(lang, "暂未检索到策略资料。", "No strategy material collected yet.")}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+        {!research?.sections?.length ? (
+          <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+            <CardContent className="p-6 text-sm text-zinc-500">
+              {tx(lang, "策略方法库正在加载，或搜索服务暂不可用。", "Strategy library is loading or the search service is unavailable.")}
+            </CardContent>
+          </Card>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -582,15 +723,16 @@ function StockUniverseTab(props: {
   quotes: Quote[];
   onSelect: (item: SymbolItem) => void;
   onAnalyze: (item: SymbolItem) => void;
+  lang: Lang;
 }) {
   const quoteMap = new Map(props.quotes.map((quote) => [quote.symbol || "", quote]));
   return (
-    <section className="grid gap-5 lg:grid-cols-[0.76fr_1.24fr]">
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+    <section className="grid items-start gap-5 lg:grid-cols-[0.76fr_1.24fr]">
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Layers3 className="h-4 w-4" />
-            股票池筛选
+            {tx(props.lang, "股票池筛选", "Universe Filters")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -600,13 +742,13 @@ function StockUniverseTab(props: {
               className="pl-9"
               value={props.stockSearch}
               onChange={(event) => props.setStockSearch(event.target.value)}
-              placeholder="搜索代码 / 公司名"
+              placeholder={tx(props.lang, "搜索代码 / 公司名", "Search ticker / company")}
             />
           </div>
           <Select value={props.sectorFilter} onValueChange={props.setSectorFilter}>
             <SelectTrigger><SelectValue placeholder="板块" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部板块</SelectItem>
+              <SelectItem value="all">{tx(props.lang, "全部板块", "All Sectors")}</SelectItem>
               {props.sectors.map((sector) => <SelectItem key={sector} value={sector}>{sector}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -614,7 +756,7 @@ function StockUniverseTab(props: {
             <SelectTrigger><SelectValue placeholder="评级" /></SelectTrigger>
             <SelectContent>
               {["all", "BUY", "HOLD", "SELL", "未评级"].map((rating) => (
-                <SelectItem key={rating} value={rating}>{rating === "all" ? "全部评级" : rating}</SelectItem>
+                <SelectItem key={rating} value={rating}>{rating === "all" ? tx(props.lang, "全部评级", "All Ratings") : rating}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -632,11 +774,11 @@ function StockUniverseTab(props: {
         </CardContent>
       </Card>
 
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-base">
-            <span>可选股票列表</span>
-            <Badge variant="secondary" className="rounded-md">{props.symbols.length} 支</Badge>
+            <span>{tx(props.lang, "可选股票列表", "Selectable Symbols")}</span>
+            <Badge variant="secondary" className="rounded-md">{props.symbols.length}</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -663,8 +805,8 @@ function StockUniverseTab(props: {
                     <RatingBadge rating={rating === "未评级" ? "HOLD" : rating} />
                   </div>
                   <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-                    <MiniMetric label="板块" value={item.sector || "未分类"} />
-                    <MiniMetric label="价格" value={formatNumber(quote?.close)} />
+                    <MiniMetric label={tx(props.lang, "板块", "Sector")} value={item.sector || tx(props.lang, "未分类", "Unclassified")} />
+                    <MiniMetric label={tx(props.lang, "价格", "Price")} value={formatNumber(quote?.close)} />
                   </div>
                   <div className="mt-3 flex items-center justify-between">
                     <Pct value={quote?.change_pct} />
@@ -676,7 +818,7 @@ function StockUniverseTab(props: {
                         props.onAnalyze(item);
                       }}
                     >
-                      Agent分析
+                      {tx(props.lang, "Agent分析", "Agent Analyze")}
                     </Button>
                   </div>
                 </div>
@@ -706,6 +848,7 @@ function ResearchTab(props: {
   assistantMessages: string[];
   report: ResearchReport | null;
   profile: SymbolProfile | null;
+  lang: Lang;
 }) {
   const history = props.profile?.history.payload || [];
 
@@ -729,7 +872,7 @@ function ResearchTab(props: {
             </SelectContent>
           </Select>
           <Select value={props.providerId} onValueChange={props.setProviderId}>
-            <SelectTrigger><SelectValue placeholder="LLM Provider" /></SelectTrigger>
+            <SelectTrigger><SelectValue placeholder={tx(props.lang, "LLM 服务", "LLM Provider")} /></SelectTrigger>
             <SelectContent>
               {props.providers.map((provider) => (
                 <SelectItem key={provider.id} value={provider.id}>{provider.name}</SelectItem>
@@ -743,73 +886,88 @@ function ResearchTab(props: {
               onChange={(event) => props.setUseLlm(event.target.checked)}
               className="h-4 w-4 accent-zinc-950"
             />
-            LLM润色
+            {tx(props.lang, "LLM润色", "LLM Polish")}
           </label>
           <Button onClick={() => props.runResearch()} disabled={props.analyzing} className="min-w-32">
             {props.analyzing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Brain className="mr-2 h-4 w-4" />}
-            生成研报
+            {tx(props.lang, "生成研报", "Generate")}
           </Button>
         </CardContent>
       </Card>
 
-      <section className="grid gap-5 lg:grid-cols-[0.92fr_1.08fr]">
-        <div className="space-y-5">
-          <ReportSummary report={props.report} />
-          <EvidenceCoverage report={props.report} />
+      <section className="grid items-stretch gap-5 lg:grid-cols-[0.92fr_1.08fr]">
+        <div className="grid gap-5">
+          <ReportSummary report={props.report} lang={props.lang} />
+          <EvidenceCoverage report={props.report} lang={props.lang} />
         </div>
 
-        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base">价格背景与数据质量</CardTitle>
+            <CardTitle className="text-base">{tx(props.lang, "价格背景与数据质量", "Price Context And Data Quality")}</CardTitle>
           </CardHeader>
           <CardContent>
             <PriceChart data={history} />
             <p className="mt-3 text-xs text-zinc-500">
-              价格图仅作为背景信息，暂不生成技术交易策略。Source: {props.profile?.history.source || "-"} · stale: {String(props.profile?.history.stale || false)}
+              {tx(
+                props.lang,
+                "价格图仅作为背景信息，当前阶段暂不输出技术交易策略。",
+                "The chart is context only; technical trading strategy is deferred in this phase.",
+              )} Source: {props.profile?.history.source || "-"} · stale: {String(props.profile?.history.stale || false)}
             </p>
           </CardContent>
         </Card>
       </section>
 
-      {props.report ? <ReportDetail report={props.report} /> : null}
+      {props.report ? <ReportDetail report={props.report} lang={props.lang} /> : null}
       <AgentAssistantCard
         messages={props.assistantMessages}
         loading={props.assistantLoading}
         onAsk={() => props.runAssistant()}
         report={props.report}
+        lang={props.lang}
       />
     </>
   );
 }
 
-function ReportSummary({ report }: { report: ResearchReport | null }) {
+function ReportSummary({ report, lang }: { report: ResearchReport | null; lang: Lang }) {
   if (!report) {
     return (
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-        <CardHeader><CardTitle className="text-base">研究结论</CardTitle></CardHeader>
-        <CardContent className="text-sm text-zinc-500">输入股票代码并运行分析后，这里会显示机构研报摘要。</CardContent>
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader><CardTitle className="text-base">{tx(lang, "研究结论", "Research Conclusion")}</CardTitle></CardHeader>
+        <CardContent className="text-sm text-zinc-500">
+          {tx(lang, "输入股票代码并运行分析后，这里会显示机构研报摘要。", "Enter a ticker and run analysis to see the institutional-style summary here.")}
+        </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+    <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
       <CardHeader>
-        <CardTitle className="flex items-center justify-between text-base">
+        <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base">
           <span>{report.company_name}</span>
-          <RatingBadge rating={report.rating} />
+          <span className="flex items-center gap-2">
+            <Button asChild size="sm" variant="outline">
+              <a href={`${API_BASE}/api/research/${encodeURIComponent(report.symbol)}/pdf?lang=${lang}`} target="_blank" rel="noreferrer">
+                <Download className="mr-2 h-3.5 w-3.5" />
+                PDF
+              </a>
+            </Button>
+            <RatingBadge rating={report.rating} />
+          </span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.12em] text-zinc-500">Thesis</p>
+          <p className="text-xs uppercase tracking-[0.12em] text-zinc-500">{tx(lang, "投资摘要", "Thesis")}</p>
           <p className="mt-2 text-sm leading-6 text-zinc-800">{report.thesis}</p>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <MiniMetric label="Price" value={formatNumber(report.current_price)} />
-          <MiniMetric label="Evidence" value={evidenceTotal(report)} />
-          <MiniMetric label="Confidence" value={report.confidence} />
-          <MiniMetric label="Risk Alerts" value={(report.risk_alerts || []).filter((item) => item.severity !== "info").length} />
+          <MiniMetric label={tx(lang, "价格", "Price")} value={formatNumber(report.current_price)} />
+          <MiniMetric label={tx(lang, "证据", "Evidence")} value={evidenceTotal(report)} />
+          <MiniMetric label={tx(lang, "置信度", "Confidence")} value={confidenceLabel(report.confidence, lang)} />
+          <MiniMetric label={tx(lang, "风险提醒", "Risk Alerts")} value={(report.risk_alerts || []).filter((item) => item.severity !== "info").length} />
         </div>
         {(report.risk_alerts || []).some((item) => item.severity !== "info") ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
@@ -822,21 +980,21 @@ function ReportSummary({ report }: { report: ResearchReport | null }) {
   );
 }
 
-function EvidenceCoverage({ report }: { report: ResearchReport | null }) {
+function EvidenceCoverage({ report, lang }: { report: ResearchReport | null; lang: Lang }) {
   const evidence = report?.research_evidence;
   const groups = [
-    ["宏观", evidence?.macro.length || 0],
-    ["公告/年报", evidence?.filings.length || 0],
-    ["公开研报", evidence?.institutional_reports.length || 0],
-    ["渠道分析", evidence?.channel_analysis.length || 0],
-    ["新闻", evidence?.news.length || 0],
+    [tx(lang, "宏观", "Macro"), evidence?.macro.length || 0],
+    [tx(lang, "公告/年报", "Filings"), evidence?.filings.length || 0],
+    [tx(lang, "公开研报", "Reports"), evidence?.institutional_reports.length || 0],
+    [tx(lang, "渠道分析", "Channels"), evidence?.channel_analysis.length || 0],
+    [tx(lang, "新闻", "News"), evidence?.news.length || 0],
   ] as const;
   return (
-    <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+    <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <FolderOpen className="h-4 w-4" />
-          资料覆盖
+          {tx(lang, "资料覆盖", "Evidence Coverage")}
         </CardTitle>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-3 md:grid-cols-5 lg:grid-cols-2">
@@ -851,96 +1009,120 @@ function EvidenceCoverage({ report }: { report: ResearchReport | null }) {
   );
 }
 
-function ReportDetail({ report }: { report: ResearchReport }) {
+function ReportDetail({ report, lang }: { report: ResearchReport; lang: Lang }) {
   const views = [
-    ["宏观周期", report.macro_context],
-    ["估值", report.valuation],
-    ["财务质量", report.financial_quality],
-    ["市场共识", report.sentiment],
+    {
+      label: tx(lang, "宏观周期", "Macro Cycle"),
+      view: report.macro_context,
+      metrics: [
+        [tx(lang, "资料数", "Sources"), report.research_evidence?.macro?.length || 0],
+        [tx(lang, "评分", "Score"), Math.round(report.macro_context.score)],
+      ],
+    },
+    {
+      label: tx(lang, "估值", "Valuation"),
+      view: report.valuation,
+      metrics: [
+        ["PE", formatNumber(report.key_metrics?.pe_ratio)],
+        ["Forward PE", formatNumber(report.key_metrics?.forward_pe)],
+        ["PB", formatNumber(report.key_metrics?.pb_ratio)],
+        [tx(lang, "市值", "Market Cap"), formatNumber(report.key_metrics?.market_cap)],
+      ],
+    },
+    {
+      label: tx(lang, "财务质量", "Financial Quality"),
+      view: report.financial_quality,
+      metrics: [
+        ["ROE", formatPercent(report.key_metrics?.roe)],
+        ["ROA", formatPercent(report.key_metrics?.roa)],
+        [tx(lang, "净利率", "Net Margin"), formatPercent(report.key_metrics?.profit_margins)],
+        [tx(lang, "收入增速", "Revenue Growth"), formatPercent(report.key_metrics?.revenue_growth)],
+      ],
+    },
+    {
+      label: tx(lang, "市场共识", "Market Consensus"),
+      view: report.sentiment,
+      metrics: [
+        [tx(lang, "新闻", "News"), report.research_evidence?.news?.length || 0],
+        [tx(lang, "机构线索", "Report Leads"), report.research_evidence?.institutional_reports?.length || 0],
+      ],
+    },
   ] as const;
 
   return (
-    <section className="grid gap-5 lg:grid-cols-4">
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
+    <section className="grid items-stretch gap-5 lg:grid-cols-4">
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <ClipboardList className="h-4 w-4" />
-            信息收集员总结
+            {tx(lang, "信息收集员总结", "Information Collector Summary")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm leading-6 text-zinc-700">{report.information_summary?.summary || "暂无摘要"}</p>
+          <p className="text-sm leading-6 text-zinc-700">{report.information_summary?.summary || tx(lang, "暂无摘要", "No summary")}</p>
           <div className="grid gap-3 md:grid-cols-2">
-            <InfoList title="结构化事实" items={report.information_summary?.structured_facts || []} />
-            <InfoList title="非结构观察" items={report.information_summary?.unstructured_notes || []} />
+            <InfoList title={tx(lang, "结构化事实", "Structured Facts")} items={report.information_summary?.structured_facts || []} lang={lang} />
+            <InfoList title={tx(lang, "非结构观察", "Unstructured Notes")} items={report.information_summary?.unstructured_notes || []} lang={lang} />
           </div>
           {report.information_summary?.data_gaps?.length ? (
-            <InfoList title="数据缺口" items={report.information_summary.data_gaps} tone="warning" />
+            <InfoList title={tx(lang, "数据缺口", "Data Gaps")} items={report.information_summary.data_gaps} tone="warning" lang={lang} />
           ) : null}
         </CardContent>
       </Card>
 
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <FileText className="h-4 w-4" />
-            公开资料目录
+            {tx(lang, "公开资料目录", "Public Evidence Book")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <EvidenceGroup title="公告 / 年报 / SEC / HKEX" items={report.research_evidence?.filings || []} />
-          <EvidenceGroup title="公开机构研报线索" items={report.research_evidence?.institutional_reports || []} />
-          <EvidenceGroup title="宏观与政策" items={report.research_evidence?.macro || []} />
+          <EvidenceGroup title={tx(lang, "公告 / 年报 / SEC / HKEX", "Filings / SEC / HKEX")} items={report.research_evidence?.filings || []} lang={lang} />
+          <EvidenceGroup title={tx(lang, "公开机构研报线索", "Public Institutional Report Leads")} items={report.research_evidence?.institutional_reports || []} lang={lang} />
+          <EvidenceGroup title={tx(lang, "宏观与政策", "Macro And Policy")} items={report.research_evidence?.macro || []} lang={lang} />
         </CardContent>
       </Card>
 
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm lg:col-span-4">
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm lg:col-span-4">
         <CardHeader>
           <CardTitle className="flex items-center justify-between text-base">
             <span className="flex items-center gap-2">
               <ShieldAlert className="h-4 w-4" />
-              风险提醒与架构校验
+              {tx(lang, "风险提醒与架构校验", "Risk Alerts And Architecture Checks")}
             </span>
             <Badge variant="secondary" className="rounded-md">{report.pipeline_diagnostics?.topology || "guarded_dag"}</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <RiskAlertList alerts={report.risk_alerts || []} compact />
+          <RiskAlertList alerts={report.risk_alerts || []} compact lang={lang} />
           <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-1">
-            <InfoList title="降延迟" items={report.pipeline_diagnostics?.latency_strategy || []} />
-            <InfoList title="防单向幻觉" items={report.pipeline_diagnostics?.hallucination_controls || []} />
-            <InfoList title="置信度调整" items={report.pipeline_diagnostics?.confidence_adjustments || []} tone="warning" />
+            <InfoList title={tx(lang, "降延迟", "Latency")} items={report.pipeline_diagnostics?.latency_strategy || []} lang={lang} />
+            <InfoList title={tx(lang, "防单向幻觉", "Anti Hallucination")} items={report.pipeline_diagnostics?.hallucination_controls || []} lang={lang} />
+            <InfoList title={tx(lang, "置信度调整", "Confidence Adjustments")} items={report.pipeline_diagnostics?.confidence_adjustments || []} tone="warning" lang={lang} />
           </div>
         </CardContent>
       </Card>
 
-      {views.map(([label, view]) => (
-        <Card key={label} className="rounded-lg border-white/80 bg-white shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between text-base">
-              {label}
-              <ScorePill score={view.score} />
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm leading-6 text-zinc-700">{view.summary}</p>
-            <div className="mt-4 space-y-2">
-              {view.evidence.slice(0, 4).map((item) => (
-                <p key={item} className="rounded-md bg-zinc-50 px-3 py-2 text-xs text-zinc-600">{item}</p>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+      {views.map((item) => (
+        <AnalysisViewCard
+          key={item.label}
+          title={item.label}
+          view={item.view}
+          metrics={item.metrics}
+          fallback={report.information_summary?.data_gaps || []}
+          lang={lang}
+        />
       ))}
 
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
-        <CardHeader><CardTitle className="text-base">Bull Case</CardTitle></CardHeader>
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
+        <CardHeader><CardTitle className="text-base">{tx(lang, "多头论点", "Bull Case")}</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {report.bull_case.map((item) => <Bullet key={item} tone="positive" text={item} />)}
         </CardContent>
       </Card>
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
-        <CardHeader><CardTitle className="text-base">Bear Case</CardTitle></CardHeader>
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
+        <CardHeader><CardTitle className="text-base">{tx(lang, "空头论点", "Bear Case")}</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {report.bear_case.map((item) => <Bullet key={item} tone="negative" text={item} />)}
         </CardContent>
@@ -949,40 +1131,86 @@ function ReportDetail({ report }: { report: ResearchReport }) {
   );
 }
 
+function AnalysisViewCard({
+  title,
+  view,
+  metrics,
+  fallback,
+  lang,
+}: {
+  title: string;
+  view: ResearchReport["valuation"];
+  metrics: readonly (readonly [string, string | number])[];
+  fallback: string[];
+  lang: Lang;
+}) {
+  const evidence = view.evidence?.length ? view.evidence : fallback.slice(0, 3);
+  return (
+    <Card className="flex h-full min-h-80 flex-col rounded-lg border-white/80 bg-white shadow-sm">
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between gap-3 text-base">
+          <span>{title}</span>
+          <ScorePill score={view.score} />
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col">
+        <p className="min-h-20 text-sm leading-6 text-zinc-700">
+          {view.summary || tx(lang, "暂无摘要，见数据缺口。", "No summary; see data gaps.")}
+        </p>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          {metrics.map(([label, value]) => (
+            <MiniMetric key={label} label={label} value={value} />
+          ))}
+        </div>
+        <div className="mt-4 space-y-2">
+          {(evidence.length ? evidence : [tx(lang, "暂无证据，报告置信度会下调。", "No evidence; report confidence is reduced.")]).slice(0, 4).map((item) => (
+            <p key={item} className="rounded-md bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-600">{item}</p>
+          ))}
+        </div>
+        <div className="mt-auto pt-3">
+          <Badge variant="secondary" className="rounded-md">{tx(lang, "数据质量", "Data Quality")}: {view.data_quality}</Badge>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function AgentAssistantCard({
   messages,
   loading,
   onAsk,
   report,
+  lang,
 }: {
   messages: string[];
   loading: boolean;
   onAsk: () => void;
   report: ResearchReport | null;
+  lang: Lang;
 }) {
   return (
     <Card className="rounded-lg border-white/80 bg-white shadow-sm">
       <CardHeader>
         <CardTitle className="flex items-center justify-between text-base">
-          <span className="flex items-center gap-2"><Bot className="h-4 w-4" />Agent 助手分析</span>
+          <span className="flex items-center gap-2"><Bot className="h-4 w-4" />{tx(lang, "Agent 助手分析", "Agent Assistant")}</span>
           <Button size="sm" variant="outline" onClick={onAsk} disabled={loading}>
             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MessageSquareText className="mr-2 h-4 w-4" />}
-            让助手总结
+            {tx(lang, "让助手总结", "Summarize")}
           </Button>
         </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="space-y-3">
-          {(messages.length ? messages : ["助手会读取最新研究报告，用信息收集员、宏观研究员和研究总监视角总结证据链、基本面结论和主要风险。"]).map((message, index) => (
+          {(messages.length ? messages : [tx(lang, "助手会读取最新研究报告，用信息收集员、宏观研究员和研究总监视角总结证据链、基本面结论和主要风险。", "The assistant reads the latest report and summarizes evidence, fundamentals, macro context, and key risks.")]).map((message, index) => (
             <div key={`${message}-${index}`} className="rounded-lg border bg-zinc-50 px-4 py-3 text-sm leading-6 text-zinc-700">
               {message}
             </div>
           ))}
         </div>
         <div className="rounded-lg border bg-white p-4">
-          <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">当前上下文</p>
+          <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">{tx(lang, "当前上下文", "Current Context")}</p>
           <p className="mt-2 text-sm leading-6 text-zinc-700">
-            {report?.thesis || "还没有当前报告。先在研报工作台点击生成研报，或让助手触发一次基础分析。"}
+            {report?.thesis || tx(lang, "还没有当前报告。先在研报工作台点击生成研报，或让助手触发一次基础分析。", "No current report yet. Generate one first, or let the assistant trigger a basic analysis.")}
           </p>
         </div>
       </CardContent>
@@ -1000,22 +1228,23 @@ function RiskCenterTab(props: {
   onSelect: (symbol: string) => void;
   onRefresh: (symbol: string) => void;
   onRefreshAll: () => void;
+  lang: Lang;
 }) {
   const severityItems = [
-    ["critical", "严重"],
-    ["warning", "警告"],
-    ["watch", "观察"],
-    ["info", "提示"],
+    ["critical", tx(props.lang, "严重", "Critical")],
+    ["warning", tx(props.lang, "警告", "Warning")],
+    ["watch", tx(props.lang, "观察", "Watch")],
+    ["info", tx(props.lang, "提示", "Info")],
   ] as const;
 
   return (
-    <section className="grid gap-5 lg:grid-cols-[0.78fr_1.22fr]">
+    <section className="grid items-start gap-5 lg:grid-cols-[0.78fr_1.22fr]">
       <div className="space-y-5">
         <Card className="rounded-lg border-white/80 bg-white shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Bell className="h-4 w-4" />
-              风险扫描
+              {tx(props.lang, "风险扫描", "Risk Scan")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -1035,25 +1264,29 @@ function RiskCenterTab(props: {
             <div className="grid grid-cols-2 gap-2">
               <Button variant="outline" onClick={() => props.onRefresh(props.symbol)} disabled={props.loading}>
                 {props.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
-                扫描单股
+                {tx(props.lang, "扫描单股", "Scan Symbol")}
               </Button>
               <Button variant="outline" onClick={props.onRefreshAll} disabled={props.loading}>
                 {props.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
-                扫描股票池
+                {tx(props.lang, "扫描股票池", "Scan Universe")}
               </Button>
             </div>
             <p className="text-xs leading-5 text-zinc-500">
-              报警覆盖大幅回撤、政策事件、周期转弱、财报季和数据质量降级；扫描不依赖 LLM。
+              {tx(
+                props.lang,
+                "报警覆盖大幅回撤、政策事件、周期转弱、财报季和数据质量降级；扫描不依赖 LLM。",
+                "Alerts cover drawdowns, policy events, cycle shifts, earnings season, and data quality degradation without relying on an LLM.",
+              )}
             </p>
           </CardContent>
         </Card>
 
         <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-          <CardHeader><CardTitle className="text-base">告警级别</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-base">{tx(props.lang, "告警级别", "Alert Severity")}</CardTitle></CardHeader>
           <CardContent className="grid grid-cols-2 gap-3">
             {severityItems.map(([severity, label]) => (
               <div key={severity} className="rounded-lg border bg-zinc-50 p-3">
-                <RiskSeverityBadge severity={severity} />
+                <RiskSeverityBadge severity={severity} lang={props.lang} />
                 <p className="mt-3 text-2xl font-semibold">{props.summary.by_severity?.[severity] || 0}</p>
                 <p className="text-xs text-zinc-500">{label}</p>
               </div>
@@ -1062,11 +1295,11 @@ function RiskCenterTab(props: {
         </Card>
 
         <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><CalendarClock className="h-4 w-4" />触发类型</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><CalendarClock className="h-4 w-4" />{tx(props.lang, "触发类型", "Trigger Types")}</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {Object.entries(props.summary.by_category || {}).map(([category, count]) => (
               <div key={category} className="flex items-center justify-between rounded-lg border bg-zinc-50 px-3 py-2 text-sm">
-                <span>{riskCategoryLabel(category)}</span>
+                <span>{riskCategoryLabel(category, props.lang)}</span>
                 <Badge variant="secondary" className="rounded-md">{count}</Badge>
               </div>
             ))}
@@ -1078,22 +1311,22 @@ function RiskCenterTab(props: {
         <Card className="rounded-lg border-white/80 bg-white shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-base">
-              <span>实时风险队列</span>
-              <Badge variant="secondary" className="rounded-md">{props.summary.total} 条</Badge>
+              <span>{tx(props.lang, "实时风险队列", "Live Risk Queue")}</span>
+              <Badge variant="secondary" className="rounded-md">{props.summary.total}</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <RiskAlertList alerts={props.alerts} />
+            <RiskAlertList alerts={props.alerts} lang={props.lang} />
           </CardContent>
         </Card>
 
         {props.report ? (
           <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-            <CardHeader><CardTitle className="text-base">当前研报风险映射</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-base">{tx(props.lang, "当前研报风险映射", "Report Risk Map")}</CardTitle></CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-3">
-              <InfoList title="风险" items={props.report.risks || []} tone="warning" />
-              <InfoList title="关键假设" items={props.report.catalysts || []} />
-              <InfoList title="校验" items={props.report.pipeline_diagnostics?.validation_checks || []} />
+              <InfoList title={tx(props.lang, "风险", "Risks")} items={props.report.risks || []} tone="warning" lang={props.lang} />
+              <InfoList title={tx(props.lang, "关键假设", "Catalysts")} items={props.report.catalysts || []} lang={props.lang} />
+              <InfoList title={tx(props.lang, "校验", "Checks")} items={props.report.pipeline_diagnostics?.validation_checks || []} lang={props.lang} />
             </CardContent>
           </Card>
         ) : null}
@@ -1102,10 +1335,10 @@ function RiskCenterTab(props: {
   );
 }
 
-function ReportsTab({ runs }: { runs: RunSummary[] }) {
+function ReportsTab({ runs, lang }: { runs: RunSummary[]; lang: Lang }) {
   return (
     <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-      <CardHeader><CardTitle className="text-base">历史报告</CardTitle></CardHeader>
+      <CardHeader><CardTitle className="text-base">{tx(lang, "历史报告", "Report History")}</CardTitle></CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
         <Table className="min-w-[780px]">
@@ -1138,14 +1371,14 @@ function ReportsTab({ runs }: { runs: RunSummary[] }) {
   );
 }
 
-function SettingsTab({ health, providers }: { health: Health | null; providers: Provider[] }) {
+function SettingsTab({ health, providers, lang }: { health: Health | null; providers: Provider[]; lang: Lang }) {
   return (
     <section className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
       <Card className="rounded-lg border-white/80 bg-white shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Settings2 className="h-4 w-4" />
-            API & Storage
+            {tx(lang, "API 与存储", "API & Storage")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -1156,7 +1389,7 @@ function SettingsTab({ health, providers }: { health: Health | null; providers: 
       </Card>
 
       <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-        <CardHeader><CardTitle className="text-base">LLM Providers</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">{tx(lang, "LLM 服务", "LLM Providers")}</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           {providers.map((provider) => (
             <div key={provider.id} className="flex items-center justify-between rounded-lg border bg-zinc-50 px-4 py-3">
@@ -1176,12 +1409,12 @@ function SettingsTab({ health, providers }: { health: Health | null; providers: 
   );
 }
 
-function RiskAlertList({ alerts, compact = false }: { alerts: RiskAlert[]; compact?: boolean }) {
+function RiskAlertList({ alerts, compact = false, lang }: { alerts: RiskAlert[]; compact?: boolean; lang: Lang }) {
   if (!alerts.length) {
     return (
       <div className="flex min-h-32 items-center justify-center rounded-lg border border-dashed bg-zinc-50 text-sm text-zinc-500">
         <FolderOpen className="mr-2 h-4 w-4" />
-        当前没有触发风险提醒
+        {tx(lang, "当前没有触发风险提醒", "No active risk alerts")}
       </div>
     );
   }
@@ -1192,8 +1425,8 @@ function RiskAlertList({ alerts, compact = false }: { alerts: RiskAlert[]; compa
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <RiskSeverityBadge severity={alert.severity} />
-                <Badge variant="secondary" className="rounded-md">{riskCategoryLabel(alert.category)}</Badge>
+                <RiskSeverityBadge severity={alert.severity} lang={lang} />
+                <Badge variant="secondary" className="rounded-md">{riskCategoryLabel(alert.category, lang)}</Badge>
                 <span className="font-mono text-xs text-zinc-500">{alert.symbol}</span>
               </div>
               <p className="mt-2 text-sm font-semibold text-zinc-950">{alert.title}</p>
@@ -1219,7 +1452,7 @@ function RiskAlertList({ alerts, compact = false }: { alerts: RiskAlert[]; compa
   );
 }
 
-function RiskSeverityBadge({ severity }: { severity: string }) {
+function RiskSeverityBadge({ severity, lang }: { severity: string; lang: Lang }) {
   const style = {
     critical: "bg-red-600 text-white",
     warning: "bg-amber-600 text-white",
@@ -1227,35 +1460,35 @@ function RiskSeverityBadge({ severity }: { severity: string }) {
     info: "bg-zinc-200 text-zinc-800 hover:bg-zinc-200",
   }[severity] || "bg-zinc-200 text-zinc-800";
   const label = {
-    critical: "严重",
-    warning: "警告",
-    watch: "观察",
-    info: "提示",
+    critical: tx(lang, "严重", "Critical"),
+    warning: tx(lang, "警告", "Warning"),
+    watch: tx(lang, "观察", "Watch"),
+    info: tx(lang, "提示", "Info"),
   }[severity] || severity;
   return <Badge className={`rounded-md ${style}`}>{label}</Badge>;
 }
 
-function riskCategoryLabel(category: string) {
+function riskCategoryLabel(category: string, lang: Lang = "zh") {
   return {
-    drawdown: "回撤",
-    policy_event: "政策",
-    cycle_shift: "周期",
-    earnings_season: "财报",
-    data_quality: "数据",
-    policy: "政策",
-    earnings: "财报",
-    macro: "宏观",
-    market: "市场",
+    drawdown: tx(lang, "回撤", "Drawdown"),
+    policy_event: tx(lang, "政策", "Policy"),
+    cycle_shift: tx(lang, "周期", "Cycle"),
+    earnings_season: tx(lang, "财报", "Earnings"),
+    data_quality: tx(lang, "数据", "Data"),
+    policy: tx(lang, "政策", "Policy"),
+    earnings: tx(lang, "财报", "Earnings"),
+    macro: tx(lang, "宏观", "Macro"),
+    market: tx(lang, "市场", "Market"),
   }[category] || category;
 }
 
-function sourceQualityLabel(quality: string) {
+function sourceQualityLabel(quality: string, lang: Lang = "zh") {
   return {
-    primary: "一手披露",
-    institutional: "机构资料",
-    media: "媒体",
-    search: "搜索线索",
-    unknown: "未知来源",
+    primary: tx(lang, "一手披露", "Primary"),
+    institutional: tx(lang, "机构资料", "Institutional"),
+    media: tx(lang, "媒体", "Media"),
+    search: tx(lang, "搜索线索", "Search"),
+    unknown: tx(lang, "未知来源", "Unknown"),
   }[quality] || quality;
 }
 
@@ -1289,13 +1522,23 @@ function MiniMetric({ label, value }: { label: string; value: string | number | 
   );
 }
 
-function InfoList({ title, items, tone = "default" }: { title: string; items: string[]; tone?: "default" | "warning" }) {
+function InfoList({
+  title,
+  items,
+  tone = "default",
+  lang,
+}: {
+  title: string;
+  items: string[];
+  tone?: "default" | "warning";
+  lang: Lang;
+}) {
   const dot = tone === "warning" ? "bg-amber-500" : "bg-zinc-500";
   return (
     <div className="rounded-lg border bg-zinc-50 p-3">
       <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">{title}</p>
       <div className="mt-3 space-y-2">
-        {(items.length ? items : ["暂无"]).slice(0, 8).map((item) => (
+        {(items.length ? items : [tx(lang, "暂无", "None")]).slice(0, 8).map((item) => (
           <div key={item} className="flex gap-2 text-xs leading-5 text-zinc-700">
             <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
             <span>{item}</span>
@@ -1344,6 +1587,41 @@ function formatNumber(value: unknown) {
   if (Math.abs(number) >= 1e6) return `${(number / 1e6).toFixed(2)}M`;
   if (Math.abs(number) >= 1000) return number.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return number.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function formatPercent(value: unknown) {
+  const number = toNumber(value);
+  if (number == null) return "-";
+  const pct = Math.abs(number) <= 10 ? number * 100 : number;
+  return `${pct.toFixed(1)}%`;
+}
+
+function confidenceLabel(value: string, lang: Lang) {
+  return {
+    low: tx(lang, "低", "Low"),
+    medium: tx(lang, "中", "Medium"),
+    high: tx(lang, "高", "High"),
+  }[value] || value;
+}
+
+function strategySectionTitle(id: string, fallback: string, lang: Lang) {
+  return {
+    value_investing: tx(lang, "价值投资方法", "Value Investing Methods"),
+    frontier_papers: tx(lang, "前沿论文与量化策略", "Frontier Papers And Quant Strategy"),
+    market_views: tx(lang, "市场观点与资产配置", "Market Views And Allocation"),
+  }[id] || fallback;
+}
+
+function strategySectionDescription(id: string, fallback: string, lang: Lang) {
+  return {
+    value_investing: tx(lang, "关注护城河、现金流、资本回报、估值安全边际和长期复利。", "Focus on moat, cash flow, returns on capital, margin of safety, and compounding."),
+    frontier_papers: tx(lang, "跟踪机器学习、因子、组合优化、市场异象等近期研究。", "Track recent work in machine learning, factors, portfolio optimization, and anomalies."),
+    market_views: tx(lang, "汇总大型资管、投行和策略团队对宏观、估值与风险溢价的观点。", "Summarize major asset-manager and sell-side views on macro, valuation, and risk premia."),
+  }[id] || fallback;
+}
+
+function tx(lang: Lang, zh: string, en: string) {
+  return lang === "en" ? en : zh;
 }
 
 function evidenceTotal(report: ResearchReport | null) {

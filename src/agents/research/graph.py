@@ -38,6 +38,7 @@ class ResearchState(TypedDict, total=False):
     run_id: str
     provider_id: str | None
     use_llm: bool
+    language: str
     quote: dict[str, Any]
     fundamentals: dict[str, Any]
     history: list[dict[str, Any]]
@@ -124,6 +125,7 @@ def run_research_pipeline(
     period: str = "6mo",
     provider_id: str | None = None,
     use_llm: bool = False,
+    language: str = "zh",
 ) -> ResearchReport:
     market = detect_market(symbol)
     normalized = normalize_symbol(symbol, market)
@@ -136,6 +138,7 @@ def run_research_pipeline(
         "run_id": str(uuid.uuid4()),
         "provider_id": provider_id,
         "use_llm": use_llm,
+        "language": "en" if language == "en" else "zh",
         "errors": [],
     }
     if use_parallel:
@@ -387,11 +390,17 @@ def information_summarizer(state: ResearchState) -> dict[str, Any]:
 def fundamental_analyst(state: ResearchState) -> dict[str, Any]:
     from config.settings import get_settings
     cfg = get_settings().strategy
+    lang = "en" if state.get("language") == "en" else "zh"
 
     fundamentals = state.get("fundamentals", {})
     pe = _num(fundamentals.get("pe_ratio"))
+    forward_pe = _num(fundamentals.get("forward_pe"))
     pb = _num(fundamentals.get("pb_ratio"))
     roe = _normalize_roe(fundamentals.get("roe"))
+    roa = _normalize_roe(fundamentals.get("roa"))
+    profit_margin = _normalize_roe(fundamentals.get("profit_margins"))
+    revenue_growth = _normalize_roe(fundamentals.get("revenue_growth"))
+    earnings_growth = _normalize_roe(fundamentals.get("earnings_growth"))
 
     valuation_score = 50.0
     valuation_evidence = []
@@ -401,12 +410,18 @@ def fundamental_analyst(state: ResearchState) -> dict[str, Any]:
             cfg.valuation_pe_bonus if 0 < pe < cfg.pe_low
             else (-cfg.valuation_pe_penalty if pe > cfg.pe_high else 0)
         )
+    if forward_pe is not None:
+        valuation_evidence.append(f"Forward PE {forward_pe:.1f}")
+        if pe is not None and 0 < forward_pe < pe:
+            valuation_score += 4
     if pb is not None:
         valuation_evidence.append(f"PB {pb:.2f}")
         valuation_score += (
             cfg.valuation_pb_bonus if 0 < pb < cfg.pb_low
             else (-cfg.valuation_pb_penalty if pb > cfg.pb_high else 0)
         )
+    if fundamentals.get("market_cap") is not None:
+        valuation_evidence.append(f"Market cap {_compact_number(fundamentals.get('market_cap'))}")
     valuation_score = _clamp(valuation_score)
 
     quality_score = 50.0
@@ -414,19 +429,33 @@ def fundamental_analyst(state: ResearchState) -> dict[str, Any]:
     if roe is not None:
         quality_evidence.append(f"ROE {roe * 100:.1f}%")
         quality_score += 20 if roe >= cfg.roe_high else (-15 if roe < cfg.roe_low else 0)
+    if roa is not None:
+        quality_evidence.append(f"ROA {roa * 100:.1f}%")
+        quality_score += 6 if roa >= 0.08 else 0
+    if profit_margin is not None:
+        quality_evidence.append(f"Net margin {profit_margin * 100:.1f}%")
+        quality_score += 8 if profit_margin >= 0.15 else (-5 if profit_margin < 0.03 else 0)
+    if revenue_growth is not None:
+        quality_evidence.append(f"Revenue growth {revenue_growth * 100:.1f}%")
+        quality_score += 6 if revenue_growth > 0.08 else (-4 if revenue_growth < 0 else 0)
+    if earnings_growth is not None:
+        quality_evidence.append(f"Earnings growth {earnings_growth * 100:.1f}%")
+        quality_score += 6 if earnings_growth > 0.08 else (-4 if earnings_growth < 0 else 0)
     if fundamentals.get("net_income") is not None:
-        quality_evidence.append("net income data available")
+        quality_evidence.append(f"Net income {_compact_number(fundamentals.get('net_income'))}")
         quality_score += 5
+    if fundamentals.get("revenue") is not None:
+        quality_evidence.append(f"Revenue {_compact_number(fundamentals.get('revenue'))}")
     quality_score = _clamp(quality_score)
 
     valuation = AnalystView(
-        summary=_valuation_summary(pe, pb),
+        summary=_valuation_summary(pe, pb, lang),
         score=valuation_score,
         evidence=valuation_evidence,
         data_quality="high" if valuation_evidence else "limited",
     )
     quality = AnalystView(
-        summary=_quality_summary(roe),
+        summary=_quality_summary(roe, lang),
         score=quality_score,
         evidence=quality_evidence,
         data_quality="high" if quality_evidence else "limited",
@@ -436,6 +465,7 @@ def fundamental_analyst(state: ResearchState) -> dict[str, Any]:
 
 def macro_analyst(state: ResearchState) -> dict[str, Any]:
     """Assess macro, policy, and cycle context from collected public evidence."""
+    lang = "en" if state.get("language") == "en" else "zh"
     evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
     evidence_items = evidence_book.macro[:4]
     news_items = [
@@ -468,9 +498,15 @@ def macro_analyst(state: ResearchState) -> dict[str, Any]:
         summary = (
             f"Macro and policy context collected from {len(evidence_items)} public sources; "
             "treat this as directional background until primary macro data is added."
+            if lang == "en"
+            else f"已从 {len(evidence_items)} 条公开资料收集宏观与政策背景；在接入一手宏观数据前，该部分作为方向性背景。"
         )
     else:
-        summary = "Macro context is thin; director should lower confidence and rely more on company-level evidence."
+        summary = (
+            "Macro context is thin; director should lower confidence and rely more on company-level evidence."
+            if lang == "en"
+            else "宏观上下文证据偏薄，研究总监应下调置信度，并更多依赖公司层面证据。"
+        )
 
     return {
         "macro_context": AnalystView(
@@ -516,6 +552,7 @@ def technical_analyst(state: ResearchState) -> dict[str, Any]:
 
 
 def news_sentiment_analyst(state: ResearchState) -> dict[str, Any]:
+    lang = "en" if state.get("language") == "en" else "zh"
     evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
     try:
         symbol = state.get("symbol", "")
@@ -527,11 +564,18 @@ def news_sentiment_analyst(state: ResearchState) -> dict[str, Any]:
     evidence = [item.get("title", "") for item in news if item.get("title")]
     evidence.extend(item.title for item in evidence_book.channel_analysis[:4])
     evidence.extend(item.title for item in evidence_book.institutional_reports[:3])
-    summary = (
-        f"Collected {len(evidence)} news, channel, and institutional-analysis signals."
-        if evidence
-        else "No fresh news or channel-analysis feed available."
-    )
+    if evidence:
+        summary = (
+            f"Collected {len(evidence)} news, channel, and institutional-analysis signals."
+            if lang == "en"
+            else f"已收集 {len(evidence)} 条新闻、渠道观点和机构分析线索。"
+        )
+    else:
+        summary = (
+            "No fresh news or channel-analysis feed available."
+            if lang == "en"
+            else "暂未获取到新的新闻或渠道分析信号。"
+        )
     score = min(62.0, 48.0 + len(evidence) * 2.0) if evidence else 43.0
     return {
         "sentiment": AnalystView(
@@ -928,7 +972,14 @@ def research_director(state: ResearchState) -> dict[str, Any]:
         try:
             llm = create_chat_model(state.get("provider_id"), tier="deep", temperature=0.2)
             if bull_view and bear_view:
+                language_instruction = (
+                    "Write the final paragraph in fluent English. "
+                    if state.get("language") == "en"
+                    else "请用简体中文输出，语气对齐中金等卖方研报的专业摘要。"
+                )
                 polish_prompt = (
+                    language_instruction
+                    +
                     "Synthesize this bull/bear debate into one concise "
                     "institutional-style investment thesis paragraph. Focus on macro, "
                     "company fundamentals, filings, public research evidence, and risks. "
@@ -936,7 +987,14 @@ def research_director(state: ResearchState) -> dict[str, Any]:
                     f"Current rating: {rating}. Data: {thesis}"
                 )
             else:
+                language_instruction = (
+                    "Write the final paragraph in fluent English. "
+                    if state.get("language") == "en"
+                    else "请用简体中文输出，语气对齐中金等卖方研报的专业摘要。"
+                )
                 polish_prompt = (
+                    language_instruction
+                    +
                     "Rewrite this investment thesis in one concise "
                     "institutional-style paragraph without changing facts. Focus on macro, "
                     "company fundamentals, filings, public research evidence, and risks. "
@@ -988,9 +1046,18 @@ def research_director(state: ResearchState) -> dict[str, Any]:
             "primary_sources": len([item for item in _flatten_evidence(evidence_book) if item.quality == "primary"]),
             "institutional_reports": len(evidence_book.institutional_reports),
             "pe_ratio": fundamentals.get("pe_ratio"),
+            "forward_pe": fundamentals.get("forward_pe"),
             "pb_ratio": fundamentals.get("pb_ratio"),
             "roe": fundamentals.get("roe"),
+            "roa": fundamentals.get("roa"),
             "market_cap": fundamentals.get("market_cap"),
+            "revenue": fundamentals.get("revenue"),
+            "net_income": fundamentals.get("net_income"),
+            "profit_margins": fundamentals.get("profit_margins"),
+            "revenue_growth": fundamentals.get("revenue_growth"),
+            "earnings_growth": fundamentals.get("earnings_growth"),
+            "sector": fundamentals.get("sector"),
+            "industry": fundamentals.get("industry"),
             "latest_close": current_price,
         },
         valuation=state["valuation"],
@@ -1009,33 +1076,71 @@ def research_director(state: ResearchState) -> dict[str, Any]:
         risks=_build_risks(state),
         sources=sources,
         llm_status=llm_status,
+        disclaimer=(
+            "本报告由 AI 系统基于公开资料与本地数据生成，仅供个人研究使用，不构成任何投资建议。"
+            if state.get("language") != "en"
+            else "This report is generated for personal research only and is not investment advice."
+        ),
     )
     return {"report": report, "llm_status": llm_status}
 
 
-def _valuation_summary(pe: float | None, pb: float | None) -> str:
+def _valuation_summary(pe: float | None, pb: float | None, lang: str = "en") -> str:
     if pe is None and pb is None:
-        return "Valuation data is incomplete."
+        return "Valuation data is incomplete." if lang == "en" else "估值数据不完整。"
     parts = []
     if pe is not None:
-        parts.append(f"PE is {pe:.1f}")
+        parts.append(f"PE is {pe:.1f}" if lang == "en" else f"PE 为 {pe:.1f} 倍")
     if pb is not None:
-        parts.append(f"PB is {pb:.2f}")
-    return "; ".join(parts) + "."
+        parts.append(f"PB is {pb:.2f}" if lang == "en" else f"PB 为 {pb:.2f} 倍")
+    return ("; ".join(parts) + ".") if lang == "en" else "；".join(parts) + "。"
 
 
-def _quality_summary(roe: float | None) -> str:
+def _compact_number(value: Any) -> str:
+    number = _num(value)
+    if number is None:
+        return "-"
+    abs_number = abs(number)
+    if abs_number >= 1_000_000_000_000:
+        return f"{number / 1_000_000_000_000:.2f}T"
+    if abs_number >= 1_000_000_000:
+        return f"{number / 1_000_000_000:.2f}B"
+    if abs_number >= 1_000_000:
+        return f"{number / 1_000_000:.2f}M"
+    return f"{number:,.2f}"
+
+
+def _quality_summary(roe: float | None, lang: str = "en") -> str:
     if roe is None:
-        return "Profitability data is incomplete."
+        return "Profitability data is incomplete." if lang == "en" else "盈利能力数据不完整。"
     if roe >= 0.18:
-        return f"ROE of {roe * 100:.1f}% indicates strong profitability."
+        return (
+            f"ROE of {roe * 100:.1f}% indicates strong profitability."
+            if lang == "en"
+            else f"ROE 为 {roe * 100:.1f}%，盈利能力较强。"
+        )
     if roe >= 0.08:
-        return f"ROE of {roe * 100:.1f}% indicates acceptable profitability."
-    return f"ROE of {roe * 100:.1f}% is below preferred quality thresholds."
+        return (
+            f"ROE of {roe * 100:.1f}% indicates acceptable profitability."
+            if lang == "en"
+            else f"ROE 为 {roe * 100:.1f}%，盈利能力处于可接受区间。"
+        )
+    return (
+        f"ROE of {roe * 100:.1f}% is below preferred quality thresholds."
+        if lang == "en"
+        else f"ROE 为 {roe * 100:.1f}%，低于偏好的财务质量阈值。"
+    )
 
 
 def _thesis(state: ResearchState, rating: str, composite: float) -> str:
     evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
+    if state.get("language") != "en":
+        return (
+            f"{state['symbol']} 当前评级为 {rating}，综合评分 {composite:.1f}。"
+            f"结论综合考虑宏观周期（{state['macro_context'].score:.0f}）、估值（{state['valuation'].score:.0f}）、"
+            f"财务质量（{state['financial_quality'].score:.0f}）和公开资料情绪（{state['sentiment'].score:.0f}）。"
+            f"本次共收集 {evidence_book.total_items} 条外部证据用于审计，未覆盖项将下调置信度。"
+        )
     return (
         f"{state['symbol']} receives a {rating} rating with a composite score of "
         f"{composite:.1f}. The conclusion balances macro context "
@@ -1057,7 +1162,7 @@ def _normalize_roe(value: Any) -> float | None:
     numeric = _num(value)
     if numeric is None:
         return None
-    return numeric / 100 if abs(numeric) > 1 else numeric
+    return numeric / 100 if abs(numeric) > 10 else numeric
 
 
 def _num(value: Any) -> float | None:

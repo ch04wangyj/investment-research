@@ -15,7 +15,7 @@ from src.data.providers.akshare_provider import (
     UsAkshareProvider,
 )
 from src.data.providers.base import MarketDataProvider, ProviderResult
-from src.data.providers.yfinance_provider import YahooChartProvider, YfinanceProvider
+from src.data.providers.yfinance_provider import NasdaqUsProvider, YahooChartProvider, YfinanceProvider
 
 
 class DataAccessLayer:
@@ -35,7 +35,7 @@ class DataAccessLayer:
         self._providers = providers or {
             "ashare": [AshareAkshareProvider(), SinaAshareProvider(), YahooChartProvider("ashare")],
             "hk": [HkAkshareProvider(), SinaHkProvider(), YahooChartProvider("hk")],
-            "us": [UsAkshareProvider(), YahooChartProvider("us"), YfinanceProvider()],
+            "us": [UsAkshareProvider(), NasdaqUsProvider(), YahooChartProvider("us"), YfinanceProvider()],
         }
 
     def detect_exchange(self, symbol: str) -> str:
@@ -72,9 +72,10 @@ class DataAccessLayer:
         normalized = normalize_symbol(symbol, market)
         return self._fetch(
             market=market,
-            cache_key=f"fund:{market}:{normalized}",
+            cache_key=f"fund:v2:{market}:{normalized}",
             ttl_seconds=86400,
             method=lambda provider: provider.get_fundamentals(normalized),
+            accept_result=_has_useful_fundamentals,
         )
 
     def get_symbol_profile(self, symbol: str, period: str = "6mo") -> dict[str, Any]:
@@ -124,6 +125,7 @@ class DataAccessLayer:
         cache_key: str,
         ttl_seconds: int,
         method: Callable[[MarketDataProvider], ProviderResult],
+        accept_result: Callable[[ProviderResult], bool] | None = None,
     ) -> ProviderResult:
         cached = self._cache.get(cache_key)
         if cached is not None:
@@ -134,9 +136,12 @@ class DataAccessLayer:
         errors: list[str] = []
         for provider in self._providers.get(market, []):
             result = method(provider)
-            if result.ok:
+            if result.ok and (accept_result is None or accept_result(result)):
                 self._cache.set(cache_key, result.to_dict(), ttl_seconds=ttl_seconds)
                 return result
+            if result.ok:
+                errors.append(f"{provider.name}: returned incomplete payload")
+                continue
             errors.append(f"{provider.name}: {result.error}")
 
         stale = self._cache.get_stale(cache_key)
@@ -181,6 +186,30 @@ def _meta(result: ProviderResult) -> dict[str, Any]:
         "error": result.error,
         "received_at": datetime.now().isoformat(),
     }
+
+
+def _has_useful_fundamentals(result: ProviderResult) -> bool:
+    payload = result.payload if isinstance(result.payload, dict) else {}
+    if not payload:
+        return False
+    useful_keys = [
+        "pe_ratio",
+        "forward_pe",
+        "pb_ratio",
+        "market_cap",
+        "revenue",
+        "net_income",
+        "roe",
+        "roa",
+        "debt_to_equity",
+        "profit_margins",
+        "revenue_growth",
+        "earnings_growth",
+        "eps",
+        "sector",
+        "industry",
+    ]
+    return any(payload.get(key) not in (None, "", "None") for key in useful_keys)
 
 
 _dal: DataAccessLayer | None = None

@@ -195,6 +195,31 @@ export type RatingSummary = {
   }>>;
 };
 
+export type StrategyResearchItem = {
+  title: string;
+  summary: string;
+  url: string;
+  source: string;
+  quality: string;
+  query: string;
+  score: number;
+  as_of: string;
+  method_tags: string[];
+};
+
+export type StrategyResearchSection = {
+  id: string;
+  title: string;
+  description: string;
+  items: StrategyResearchItem[];
+};
+
+export type StrategyResearch = {
+  generated_at: string;
+  principles: string[];
+  sections: StrategyResearchSection[];
+};
+
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!response.ok) {

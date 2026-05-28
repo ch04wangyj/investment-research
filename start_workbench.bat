@@ -9,9 +9,11 @@ if exist ".env" (
     )
 )
 
-if not exist "frontend\.env.local" (
-    > "frontend\.env.local" echo NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:%API_PORT%
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%API_PORT% .*LISTENING"') do (
+    taskkill /PID %%P /F >nul 2>nul
 )
+
+> "frontend\.env.local" echo NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:%API_PORT%
 
 start "Investment Research API" cmd /k python scripts\run_api.py
 start "Investment Research Frontend" cmd /k "cd frontend && npm run dev"

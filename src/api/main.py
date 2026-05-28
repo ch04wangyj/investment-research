@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from config.settings import get_settings
@@ -15,6 +16,8 @@ from src.data.dal import detect_market, get_dal, normalize_symbol
 from src.data.indices import fetch_all_indices
 from src.data.news_fetcher import fetch_financial_news
 from src.research.schemas import ResearchRequest
+from src.research.strategy_research import collect_strategy_research
+from src.research.pdf_export import render_research_pdf
 from src.risk.alerts import evaluate_market_risks, evaluate_symbol_risk, summarize_alerts
 from src.storage.repository import AgentReportRepository, TrackedSymbolRepository
 
@@ -32,6 +35,7 @@ app.add_middleware(
         "http://localhost:3001",
         "http://127.0.0.1:3001",
     ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -50,6 +54,7 @@ class AssistantRequest(BaseModel):
     use_llm: bool = False
     period: str = "6mo"
     question: str = ""
+    language: str = "zh"
 
 
 def _db_path() -> str:
@@ -117,6 +122,19 @@ def market_overview() -> dict[str, Any]:
         "sectors": build_sector_summary(symbols, quotes),
         "ratings": build_rating_summary(),
     }
+
+
+@app.get("/api/news")
+def news(symbol: str | None = None, limit: int = 30) -> dict[str, Any]:
+    return {
+        "items": fetch_financial_news(symbol=symbol, max_items=max(1, min(limit, 80))),
+        "symbol": symbol,
+    }
+
+
+@app.get("/api/strategy/research")
+def strategy_research(limit: int = 6) -> dict[str, Any]:
+    return collect_strategy_research(max_items_per_section=max(1, min(limit, 12)))
 
 
 @app.get("/api/risk/alerts")
@@ -193,6 +211,22 @@ def latest_research(symbol: str) -> dict[str, Any]:
     return serialize_report(rows[0])
 
 
+@app.get("/api/research/{symbol}/pdf")
+def research_pdf(symbol: str, lang: str = "zh") -> Response:
+    normalized = normalize_symbol(symbol)
+    rows = _report_repo().get_latest(normalized, limit=1)
+    if not rows:
+        raise HTTPException(status_code=404, detail="No research report found")
+    report = rows[0].content or {}
+    pdf_bytes = render_research_pdf(report, lang="en" if lang == "en" else "zh")
+    filename = f"{normalized}_research_report.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/api/research/{symbol}")
 def run_research(symbol: str, request: ResearchRequest | None = None) -> dict[str, Any]:
     request = request or ResearchRequest()
@@ -202,6 +236,7 @@ def run_research(symbol: str, request: ResearchRequest | None = None) -> dict[st
         period=request.period,
         provider_id=request.provider_id,
         use_llm=request.use_llm,
+        language=request.language,
     )
     content = report.model_dump(mode="json")
     repo = _report_repo()
@@ -229,6 +264,7 @@ def assistant_analysis(symbol: str, request: AssistantRequest | None = None) -> 
             period=request.period,
             provider_id=request.provider_id,
             use_llm=request.use_llm,
+            language="en" if request.language == "en" else "zh",
         )
         content = report.model_dump(mode="json")
         _report_repo().save({

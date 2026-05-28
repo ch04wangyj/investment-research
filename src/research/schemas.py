@@ -169,6 +169,7 @@ class ResearchRequest(BaseModel):
     provider_id: str | None = None
     use_llm: bool = False
     period: str = "6mo"
+    language: Literal["zh", "en"] = "zh"
 
 
 class ResearchRunSummary(BaseModel):
