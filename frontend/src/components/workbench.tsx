@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   AlertCircle,
-  BarChart3,
   Bell,
   Bot,
   Brain,
@@ -26,8 +25,6 @@ import {
   Settings2,
   ShieldAlert,
   Sparkles,
-  Target,
-  TrendingUp,
   Zap,
 } from "lucide-react";
 
@@ -38,7 +35,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -46,6 +42,7 @@ import {
   apiPost,
   API_BASE,
   type Provider,
+  type EvidenceItem,
   type Quote,
   type RatingSummary,
   type ResearchReport,
@@ -112,7 +109,7 @@ export function Workbench() {
   const [symbol, setSymbol] = useState("AAPL");
   const [period, setPeriod] = useState("6mo");
   const [providerId, setProviderId] = useState("deepseek");
-  const [useLlm, setUseLlm] = useState(false);
+  const [useLlm, setUseLlm] = useState(true);
   const [stockSearch, setStockSearch] = useState("");
   const [sectorFilter, setSectorFilter] = useState("all");
   const [ratingFilter, setRatingFilter] = useState("all");
@@ -288,11 +285,14 @@ export function Workbench() {
           <div>
             <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-zinc-500">
               <Sparkles className="h-3.5 w-3.5" />
-              Professional AI Research Workbench
+              Evidence-first AI Research Workbench
             </div>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-950 md:text-3xl">
-              AI 投资研究工作台
+              AI 深度研报工作台
             </h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-600">
+              先快速收集宏观、公告/年报、公开研报线索、新闻与渠道观点，再生成可追溯的机构风格研报。
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={health?.status === "ok" ? "default" : "secondary"} className="h-8 rounded-md px-3">
@@ -325,45 +325,20 @@ export function Workbench() {
 
         <section className="grid gap-4 md:grid-cols-5">
           <MetricCard icon={<Gauge />} label="Tracked Symbols" value={overview.watchlist.length} />
-          <MetricCard icon={<Database />} label="Provider Routes" value={providerCount} />
+          <MetricCard icon={<Database />} label="Data Routes" value={providerCount} />
           <MetricCard icon={<FileText />} label="Research Runs" value={runs.length} />
           <MetricCard icon={<ShieldAlert />} label="Risk Alerts" value={activeRiskCount} />
           <MetricCard icon={<Activity />} label="API Version" value={health?.version || "0.2.0"} />
         </section>
 
-        <Tabs defaultValue="overview" className="space-y-5">
-          <TabsList className="grid h-auto w-full grid-cols-2 rounded-lg bg-white p-1 shadow-sm md:w-[1040px] md:grid-cols-7">
-            <TabsTrigger value="overview">市场概览</TabsTrigger>
+        <Tabs defaultValue="research" className="space-y-5">
+          <TabsList className="grid h-auto w-full grid-cols-2 rounded-lg bg-white p-1 shadow-sm md:w-[780px] md:grid-cols-5">
+            <TabsTrigger value="research">研报工作台</TabsTrigger>
+            <TabsTrigger value="evidence">资料目录</TabsTrigger>
             <TabsTrigger value="universe">股票池</TabsTrigger>
-            <TabsTrigger value="research">单股研究</TabsTrigger>
-            <TabsTrigger value="assistant">Agent助手</TabsTrigger>
             <TabsTrigger value="risk">风险提醒</TabsTrigger>
-            <TabsTrigger value="strategy">策略评级</TabsTrigger>
             <TabsTrigger value="reports">报告历史</TabsTrigger>
           </TabsList>
-
-          <TabsContent value="overview" className="space-y-5">
-            <OverviewTab loading={loading} overview={overview} />
-          </TabsContent>
-
-          <TabsContent value="universe" className="space-y-5">
-            <StockUniverseTab
-              symbols={filteredSymbols}
-              sectors={sectors}
-              stockSearch={stockSearch}
-              setStockSearch={setStockSearch}
-              sectorFilter={sectorFilter}
-              setSectorFilter={setSectorFilter}
-              ratingFilter={ratingFilter}
-              setRatingFilter={setRatingFilter}
-              ratingBySymbol={latestRatingBySymbol}
-              quotes={overview.quotes}
-              onSelect={(item) => void selectSymbol(item.symbol)}
-              onAnalyze={(item) => {
-                void runResearch(item.symbol);
-              }}
-            />
-          </TabsContent>
 
           <TabsContent value="research" className="space-y-5">
             <ResearchTab
@@ -386,15 +361,26 @@ export function Workbench() {
             />
           </TabsContent>
 
-          <TabsContent value="assistant" className="space-y-5">
-            <AssistantTab
-              symbol={symbol}
-              watchlist={overview.watchlist}
-              onSelect={(next) => void selectSymbol(next)}
-              onAsk={runAssistant}
-              loading={assistantLoading}
-              messages={assistantMessages}
-              report={report}
+          <TabsContent value="evidence" className="space-y-5">
+            <EvidenceLibraryTab report={report} overview={overview} />
+          </TabsContent>
+
+          <TabsContent value="universe" className="space-y-5">
+            <StockUniverseTab
+              symbols={filteredSymbols}
+              sectors={sectors}
+              stockSearch={stockSearch}
+              setStockSearch={setStockSearch}
+              sectorFilter={sectorFilter}
+              setSectorFilter={setSectorFilter}
+              ratingFilter={ratingFilter}
+              setRatingFilter={setRatingFilter}
+              ratingBySymbol={latestRatingBySymbol}
+              quotes={overview.quotes}
+              onSelect={(item) => void selectSymbol(item.symbol)}
+              onAnalyze={(item) => {
+                void runResearch(item.symbol);
+              }}
             />
           </TabsContent>
 
@@ -410,10 +396,6 @@ export function Workbench() {
               onRefresh={(next) => void refreshRisk(next)}
               onRefreshAll={() => void refreshRisk()}
             />
-          </TabsContent>
-
-          <TabsContent value="strategy" className="space-y-5">
-            <StrategyTab overview={overview} runs={runs} report={report} onSelect={(next) => void selectSymbol(next)} />
           </TabsContent>
 
           <TabsContent value="reports">
@@ -438,89 +420,6 @@ function MetricCard({ icon, label, value }: { icon: ReactNode; label: string; va
         <div className="rounded-lg border bg-zinc-50 p-2 text-zinc-700 [&_svg]:h-5 [&_svg]:w-5">{icon}</div>
       </CardContent>
     </Card>
-  );
-}
-
-function OverviewTab({ loading, overview }: { loading: boolean; overview: Overview }) {
-  if (loading) {
-    return (
-      <div className="grid gap-4 md:grid-cols-3">
-        {Array.from({ length: 6 }).map((_, index) => <Skeleton key={index} className="h-32 rounded-lg" />)}
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <section className="grid gap-4 lg:grid-cols-3">
-        {overview.indices.slice(0, 6).map((item, index) => (
-          <Card key={`${String(item.code || item.name)}-${index}`} className="rounded-lg border-white/80 bg-white shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-zinc-500">{String(item.name || item.name_en || "Index")}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-end justify-between">
-                <p className="text-2xl font-semibold tracking-tight">{formatNumber(item.price)}</p>
-                <Pct value={toNumber(item.change_pct)} />
-              </div>
-              <p className="mt-3 text-xs text-zinc-500">{String(item.source || "market data")}</p>
-            </CardContent>
-          </Card>
-        ))}
-      </section>
-
-      <section className="grid gap-5 lg:grid-cols-[1.5fr_1fr]">
-        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <BarChart3 className="h-4 w-4" />
-              自选股行情
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-            <Table className="min-w-[640px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Symbol</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Price</TableHead>
-                  <TableHead>Change</TableHead>
-                  <TableHead>Source</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(overview.quotes.length ? overview.quotes : overview.watchlist.slice(0, 12).map((item): Quote => ({
-                  symbol: item.symbol,
-                  name: item.name,
-                }))).slice(0, 12).map((quote, index) => (
-                  <TableRow key={`${quote.symbol}-${index}`}>
-                    <TableCell className="font-mono font-medium">{quote.symbol}</TableCell>
-                    <TableCell>{quote.name || "-"}</TableCell>
-                    <TableCell>{formatNumber(quote.close)}</TableCell>
-                    <TableCell><Pct value={quote.change_pct} /></TableCell>
-                    <TableCell className="text-xs text-zinc-500">{quote._meta?.source || "-"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Newspaper className="h-4 w-4" />
-              新闻与政策目录
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <NewsDirectory items={overview.news} />
-          </CardContent>
-        </Card>
-      </section>
-    </>
   );
 }
 
@@ -593,6 +492,78 @@ function NewsDirectory({ items }: { items: Array<Record<string, unknown>> }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function EvidenceLibraryTab({ report, overview }: { report: ResearchReport | null; overview: Overview }) {
+  const evidence = report?.research_evidence;
+  return (
+    <section className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FolderOpen className="h-4 w-4" />
+            {report ? `${report.symbol} 公开资料目录` : "公开资料目录"}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {report ? (
+            <>
+              <EvidenceGroup title="公告 / 年报 / 监管披露" items={evidence?.filings || []} />
+              <EvidenceGroup title="公开机构研报线索" items={evidence?.institutional_reports || []} />
+              <EvidenceGroup title="宏观与政策背景" items={evidence?.macro || []} />
+              <EvidenceGroup title="渠道观点与新闻共识" items={[...(evidence?.channel_analysis || []), ...(evidence?.news || [])]} />
+              {evidence?.errors?.length ? <InfoList title="检索问题" items={evidence.errors} tone="warning" /> : null}
+            </>
+          ) : (
+            <div className="rounded-lg border border-dashed bg-zinc-50 p-6 text-sm leading-6 text-zinc-500">
+              先在研报工作台生成一份报告，这里会展开公告/年报、公开研报线索、宏观政策和渠道分析目录。
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Newspaper className="h-4 w-4" />
+            新闻与政策目录
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <NewsDirectory items={overview.news} />
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+function EvidenceGroup({ title, items }: { title: string; items: EvidenceItem[] }) {
+  return (
+    <div className="rounded-lg border bg-zinc-50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">{title}</p>
+        <Badge variant="secondary" className="rounded-md">{items.length}</Badge>
+      </div>
+      <div className="mt-3 space-y-2">
+        {(items.length ? items : []).slice(0, 6).map((item) => (
+          <a
+            key={`${item.channel}-${item.url}-${item.title}`}
+            href={item.url || "#"}
+            target="_blank"
+            rel="noreferrer"
+            className="block rounded-md border bg-white px-3 py-2 text-sm leading-5 text-zinc-800 hover:border-zinc-400"
+          >
+            <span className="line-clamp-2 font-medium">{item.title || "Untitled source"}</span>
+            <span className="mt-1 block text-xs text-zinc-500">
+              {sourceQualityLabel(item.quality)} · {item.source || "source"} · score {Math.round(item.score)}
+            </span>
+            {item.summary ? <span className="mt-2 line-clamp-2 block text-xs leading-5 text-zinc-600">{item.summary}</span> : null}
+          </a>
+        ))}
+        {!items.length ? <p className="rounded-md bg-white px-3 py-2 text-xs text-zinc-500">暂无可用来源，报告会降低置信度。</p> : null}
       </div>
     </div>
   );
@@ -741,7 +712,7 @@ function ResearchTab(props: {
   return (
     <>
       <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-        <CardContent className="grid gap-3 p-4 md:grid-cols-[1.2fr_0.8fr_1fr_auto_auto]">
+        <CardContent className="grid gap-3 p-4 md:grid-cols-[1.1fr_0.7fr_1fr_auto_auto]">
           <div className="relative">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
             <Input
@@ -772,29 +743,32 @@ function ResearchTab(props: {
               onChange={(event) => props.setUseLlm(event.target.checked)}
               className="h-4 w-4 accent-zinc-950"
             />
-            LLM
+            LLM润色
           </label>
           <Button onClick={() => props.runResearch()} disabled={props.analyzing} className="min-w-32">
             {props.analyzing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Brain className="mr-2 h-4 w-4" />}
-            Analyze
+            生成研报
           </Button>
         </CardContent>
       </Card>
 
-      <section className="grid gap-5 lg:grid-cols-[1.25fr_0.75fr]">
+      <section className="grid gap-5 lg:grid-cols-[0.92fr_1.08fr]">
+        <div className="space-y-5">
+          <ReportSummary report={props.report} />
+          <EvidenceCoverage report={props.report} />
+        </div>
+
         <Card className="rounded-lg border-white/80 bg-white shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base">K 线与成交量</CardTitle>
+            <CardTitle className="text-base">价格背景与数据质量</CardTitle>
           </CardHeader>
           <CardContent>
             <PriceChart data={history} />
             <p className="mt-3 text-xs text-zinc-500">
-              Source: {props.profile?.history.source || "-"} · stale: {String(props.profile?.history.stale || false)}
+              价格图仅作为背景信息，暂不生成技术交易策略。Source: {props.profile?.history.source || "-"} · stale: {String(props.profile?.history.stale || false)}
             </p>
           </CardContent>
         </Card>
-
-        <ReportSummary report={props.report} />
       </section>
 
       {props.report ? <ReportDetail report={props.report} /> : null}
@@ -833,7 +807,7 @@ function ReportSummary({ report }: { report: ResearchReport | null }) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           <MiniMetric label="Price" value={formatNumber(report.current_price)} />
-          <MiniMetric label="Target 6M" value={formatNumber(report.price_target_6m)} />
+          <MiniMetric label="Evidence" value={evidenceTotal(report)} />
           <MiniMetric label="Confidence" value={report.confidence} />
           <MiniMetric label="Risk Alerts" value={(report.risk_alerts || []).filter((item) => item.severity !== "info").length} />
         </div>
@@ -848,12 +822,41 @@ function ReportSummary({ report }: { report: ResearchReport | null }) {
   );
 }
 
+function EvidenceCoverage({ report }: { report: ResearchReport | null }) {
+  const evidence = report?.research_evidence;
+  const groups = [
+    ["宏观", evidence?.macro.length || 0],
+    ["公告/年报", evidence?.filings.length || 0],
+    ["公开研报", evidence?.institutional_reports.length || 0],
+    ["渠道分析", evidence?.channel_analysis.length || 0],
+    ["新闻", evidence?.news.length || 0],
+  ] as const;
+  return (
+    <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <FolderOpen className="h-4 w-4" />
+          资料覆盖
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="grid grid-cols-2 gap-3 md:grid-cols-5 lg:grid-cols-2">
+        {groups.map(([label, count]) => (
+          <div key={label} className="rounded-lg border bg-zinc-50 p-3">
+            <p className="text-xs text-zinc-500">{label}</p>
+            <p className="mt-2 text-2xl font-semibold">{count}</p>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 function ReportDetail({ report }: { report: ResearchReport }) {
   const views = [
+    ["宏观周期", report.macro_context],
     ["估值", report.valuation],
     ["财务质量", report.financial_quality],
-    ["技术面", report.technical],
-    ["新闻情绪", report.sentiment],
+    ["市场共识", report.sentiment],
   ] as const;
 
   return (
@@ -880,26 +883,14 @@ function ReportDetail({ report }: { report: ResearchReport }) {
       <Card className="rounded-lg border-white/80 bg-white shadow-sm lg:col-span-2">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Target className="h-4 w-4" />
-            交易策略员
+            <FileText className="h-4 w-4" />
+            公开资料目录
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          {report.trading_strategy ? (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <MiniMetric label="动作" value={strategyLabel(report.trading_strategy.action)} />
-                <MiniMetric label="仓位" value={`${report.trading_strategy.position_size_pct}%`} />
-                <MiniMetric label="止损" value={formatNumber(report.trading_strategy.stop_loss)} />
-                <MiniMetric label="止盈" value={formatNumber(report.trading_strategy.take_profit)} />
-              </div>
-              <MiniMetric label="入场区间" value={report.trading_strategy.entry_zone} />
-              <InfoList title="策略依据" items={report.trading_strategy.rationale} />
-              <InfoList title="失效条件" items={report.trading_strategy.invalidation} tone="warning" />
-            </div>
-          ) : (
-            <p className="text-sm text-zinc-500">暂无交易策略。</p>
-          )}
+        <CardContent className="space-y-4">
+          <EvidenceGroup title="公告 / 年报 / SEC / HKEX" items={report.research_evidence?.filings || []} />
+          <EvidenceGroup title="公开机构研报线索" items={report.research_evidence?.institutional_reports || []} />
+          <EvidenceGroup title="宏观与政策" items={report.research_evidence?.macro || []} />
         </CardContent>
       </Card>
 
@@ -982,7 +973,7 @@ function AgentAssistantCard({
       </CardHeader>
       <CardContent className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="space-y-3">
-          {(messages.length ? messages : ["助手会读取最新研究报告，分别用信息收集员和交易策略员人格给出重点总结。"]).map((message, index) => (
+          {(messages.length ? messages : ["助手会读取最新研究报告，用信息收集员、宏观研究员和研究总监视角总结证据链、基本面结论和主要风险。"]).map((message, index) => (
             <div key={`${message}-${index}`} className="rounded-lg border bg-zinc-50 px-4 py-3 text-sm leading-6 text-zinc-700">
               {message}
             </div>
@@ -991,49 +982,11 @@ function AgentAssistantCard({
         <div className="rounded-lg border bg-white p-4">
           <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">当前上下文</p>
           <p className="mt-2 text-sm leading-6 text-zinc-700">
-            {report?.thesis || "还没有当前报告。先在单股研究页运行 Analyze，或直接点击助手总结生成基础分析。"}
+            {report?.thesis || "还没有当前报告。先在研报工作台点击生成研报，或让助手触发一次基础分析。"}
           </p>
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function AssistantTab(props: {
-  symbol: string;
-  watchlist: SymbolItem[];
-  onSelect: (symbol: string) => void;
-  onAsk: (question?: string) => void;
-  loading: boolean;
-  messages: string[];
-  report: ResearchReport | null;
-}) {
-  const [question, setQuestion] = useState("这只股票现在适合观察、持有还是减仓？");
-  return (
-    <section className="grid gap-5 lg:grid-cols-[0.72fr_1.28fr]">
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-        <CardHeader><CardTitle className="text-base">选择股票给 Agent 助手</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          <Select value={props.symbol} onValueChange={props.onSelect}>
-            <SelectTrigger><SelectValue placeholder="选择股票" /></SelectTrigger>
-            <SelectContent>
-              {props.watchlist.map((item) => (
-                <SelectItem key={item.symbol} value={item.symbol}>{item.symbol} · {item.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="问助手一个研究问题" />
-          <Button className="w-full" onClick={() => props.onAsk(question)} disabled={props.loading}>
-            {props.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Bot className="mr-2 h-4 w-4" />}
-            启动助手分析
-          </Button>
-          <p className="text-xs leading-5 text-zinc-500">
-            助手会优先读取最新结构化报告；如没有报告，会触发一次轻量研究流水线。
-          </p>
-        </CardContent>
-      </Card>
-      <AgentAssistantCard messages={props.messages} loading={props.loading} onAsk={() => props.onAsk(question)} report={props.report} />
-    </section>
   );
 }
 
@@ -1139,102 +1092,12 @@ function RiskCenterTab(props: {
             <CardHeader><CardTitle className="text-base">当前研报风险映射</CardTitle></CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-3">
               <InfoList title="风险" items={props.report.risks || []} tone="warning" />
-              <InfoList title="策略失效" items={props.report.trading_strategy?.invalidation || []} tone="warning" />
+              <InfoList title="关键假设" items={props.report.catalysts || []} />
               <InfoList title="校验" items={props.report.pipeline_diagnostics?.validation_checks || []} />
             </CardContent>
           </Card>
         ) : null}
       </div>
-    </section>
-  );
-}
-
-function StrategyTab({
-  overview,
-  runs,
-  report,
-  onSelect,
-}: {
-  overview: Overview;
-  runs: RunSummary[];
-  report: ResearchReport | null;
-  onSelect: (symbol: string) => void;
-}) {
-  const ratingCounts = overview.ratings?.counts || {};
-  return (
-    <section className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
-      <div className="space-y-5">
-        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><TrendingUp className="h-4 w-4" />投资评级分布</CardTitle></CardHeader>
-          <CardContent className="grid grid-cols-3 gap-3">
-            {["BUY", "HOLD", "SELL"].map((rating) => (
-              <div key={rating} className="rounded-lg border bg-zinc-50 p-4">
-                <RatingBadge rating={rating} />
-                <p className="mt-3 text-2xl font-semibold">{ratingCounts[rating] || runs.filter((run) => run.rating === rating).length}</p>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Layers3 className="h-4 w-4" />板块分类</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            {(overview.sectors || []).map((sector) => (
-              <div key={sector.sector} className="rounded-lg border bg-zinc-50 p-3">
-                <div className="flex items-center justify-between">
-                  <p className="font-medium">{sector.sector}</p>
-                  <Badge variant="secondary">{sector.count} 支</Badge>
-                </div>
-                <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
-                  <span>上涨 {sector.positive} / 下跌 {sector.negative}</span>
-                  <Pct value={sector.avg_change_pct} />
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
-      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
-        <CardHeader>
-          <CardTitle className="text-base">最新策略与评级股票</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {report?.trading_strategy ? (
-            <div className="rounded-lg border bg-zinc-50 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-mono text-sm font-semibold">{report.symbol}</p>
-                  <p className="text-sm text-zinc-600">{report.company_name}</p>
-                </div>
-                <RatingBadge rating={report.rating} />
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-                <MiniMetric label="动作" value={strategyLabel(report.trading_strategy.action)} />
-                <MiniMetric label="仓位" value={`${report.trading_strategy.position_size_pct}%`} />
-                <MiniMetric label="入场" value={report.trading_strategy.entry_zone} />
-                <MiniMetric label="目标" value={formatNumber(report.trading_strategy.take_profit)} />
-              </div>
-            </div>
-          ) : null}
-          <div className="grid gap-3 md:grid-cols-2">
-            {runs.slice(0, 12).map((run) => (
-              <button
-                key={run.id}
-                onClick={() => onSelect(run.ticker)}
-                className="rounded-lg border bg-white p-4 text-left shadow-sm hover:border-zinc-400"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-mono text-sm font-semibold">{run.ticker}</p>
-                    <p className="text-sm text-zinc-600">{run.company_name || "-"}</p>
-                  </div>
-                  <RatingBadge rating={run.rating || "HOLD"} />
-                </div>
-                <p className="mt-3 text-xs text-zinc-500">{new Date(run.created_at).toLocaleString()}</p>
-              </button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
     </section>
   );
 }
@@ -1386,6 +1249,16 @@ function riskCategoryLabel(category: string) {
   }[category] || category;
 }
 
+function sourceQualityLabel(quality: string) {
+  return {
+    primary: "一手披露",
+    institutional: "机构资料",
+    media: "媒体",
+    search: "搜索线索",
+    unknown: "未知来源",
+  }[quality] || quality;
+}
+
 function newsCategory(item: Record<string, unknown>) {
   const text = `${String(item.title || "")} ${String(item.summary || "")}`.toLowerCase();
   if (/政策|监管|关税|制裁|央行|证监会|policy|regulation|tariff|sanction|fed|sec/.test(text)) return "policy";
@@ -1438,15 +1311,6 @@ function RatingBadge({ rating }: { rating: string }) {
   return <Badge className={`rounded-md ${color}`}>{rating}</Badge>;
 }
 
-function strategyLabel(action: string) {
-  return {
-    accumulate: "分批买入",
-    hold: "持有观察",
-    reduce: "降低仓位",
-    avoid: "暂时回避",
-  }[action] || action;
-}
-
 function ScorePill({ score }: { score: number }) {
   const tone = score >= 62 ? "text-emerald-700 bg-emerald-50" : score <= 42 ? "text-red-700 bg-red-50" : "text-zinc-700 bg-zinc-100";
   return <span className={`rounded-md px-2 py-1 text-xs font-medium ${tone}`}>{Math.round(score)}</span>;
@@ -1480,6 +1344,18 @@ function formatNumber(value: unknown) {
   if (Math.abs(number) >= 1e6) return `${(number / 1e6).toFixed(2)}M`;
   if (Math.abs(number) >= 1000) return number.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return number.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function evidenceTotal(report: ResearchReport | null) {
+  const evidence = report?.research_evidence;
+  if (!evidence) return 0;
+  return [
+    evidence.macro,
+    evidence.filings,
+    evidence.institutional_reports,
+    evidence.channel_analysis,
+    evidence.news,
+  ].reduce((total, items) => total + items.length, 0);
 }
 
 function toNumber(value: unknown): number | null {

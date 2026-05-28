@@ -241,12 +241,19 @@ def assistant_analysis(symbol: str, request: AssistantRequest | None = None) -> 
         })
 
     info = content.get("information_summary", {}) or {}
-    strategy = content.get("trading_strategy", {}) or {}
+    evidence = content.get("research_evidence", {}) or {}
+    macro = content.get("macro_context", {}) or {}
     risk_items = content.get("risk_alerts", []) or []
     rating = content.get("rating", "HOLD")
+    evidence_count = sum(
+        len(evidence.get(key, []) or [])
+        for key in ["macro", "filings", "institutional_reports", "channel_analysis", "news"]
+    )
     response = [
-        f"信息收集员：{info.get('summary') or '已完成基础行情、历史价格和可得基本面扫描。'}",
+        f"信息收集员：{info.get('summary') or '已完成行情、基本面、公告/研报线索与新闻扫描。'}",
         "非结构观察：" + "；".join((info.get("unstructured_notes") or [])[:3]),
+        f"宏观研究员：{macro.get('summary') or '宏观上下文仍需补充。'}",
+        f"资料目录：本次收集 {evidence_count} 条公开证据，覆盖公告/年报、机构研报线索、宏观与渠道分析。",
         (
             "风险提醒员："
             + "；".join(
@@ -255,14 +262,7 @@ def assistant_analysis(symbol: str, request: AssistantRequest | None = None) -> 
                 if isinstance(item, dict)
             )
         ),
-        (
-            f"交易策略员：当前评级 {rating}，策略动作 {strategy.get('action', 'hold')}，"
-            f"建议仓位 {strategy.get('position_size_pct', 0)}%，入场区间 {strategy.get('entry_zone', '-')}"
-        ),
-        (
-            f"风险边界：止损 {strategy.get('stop_loss', '-')}，"
-            f"止盈 {strategy.get('take_profit', '-')}。"
-        ),
+        f"研究总监：当前研报评级 {rating}；本阶段不输出交易策略，先保证信息覆盖、证据链和基本面结论可靠。",
     ]
     if request.question:
         response.append(f"针对你的问题：{request.question}。以上判断优先基于当前结构化报告，不构成投资建议。")

@@ -21,10 +21,12 @@ from src.research.schemas import (
     DataSource,
     InformationSummary,
     PipelineDiagnostics,
+    ResearchEvidenceBook,
     ResearchReport,
     RiskAlert,
     TradingStrategy,
 )
+from src.research.source_collector import collect_research_evidence
 from src.risk.alerts import evaluate_symbol_risk_from_payload, risk_penalty
 
 
@@ -41,7 +43,9 @@ class ResearchState(TypedDict, total=False):
     history: list[dict[str, Any]]
     news: list[dict[str, Any]]
     sources: list[dict[str, Any]]
+    evidence_book: ResearchEvidenceBook
     information_summary: InformationSummary
+    macro_context: AnalystView
     valuation: AnalystView
     financial_quality: AnalystView
     technical: AnalystView
@@ -65,14 +69,15 @@ def build_research_graph(parallel: bool = False):
         workflow.add_node("CollectSingle", _collect_single)
         workflow.add_node("AggregateData", aggregate_collected_data)
         # Sequential stages after aggregation
+        workflow.add_node("ResearchSourceCollector", research_source_collector)
         workflow.add_node("InformationSummarizer", information_summarizer)
+        workflow.add_node("MacroAnalyst", macro_analyst)
         workflow.add_node("FundamentalAnalyst", fundamental_analyst)
         workflow.add_node("TechnicalAnalyst", technical_analyst)
         workflow.add_node("NewsSentimentAnalyst", news_sentiment_analyst)
         workflow.add_node("RiskMonitor", risk_monitor)
         workflow.add_node("BullResearcher", bull_researcher)
         workflow.add_node("BearResearcher", bear_researcher)
-        workflow.add_node("TradingStrategist", trading_strategist)
         workflow.add_node("ResearchDirector", research_director)
 
         workflow.set_entry_point("ParallelDataCollector")
@@ -82,30 +87,32 @@ def build_research_graph(parallel: bool = False):
             ["CollectSingle"],
         )
         workflow.add_edge("CollectSingle", "AggregateData")
-        workflow.add_edge("AggregateData", "InformationSummarizer")
+        workflow.add_edge("AggregateData", "ResearchSourceCollector")
     else:
         workflow.add_node("DataCollector", data_collector)
+        workflow.add_node("ResearchSourceCollector", research_source_collector)
         workflow.add_node("InformationSummarizer", information_summarizer)
+        workflow.add_node("MacroAnalyst", macro_analyst)
         workflow.add_node("FundamentalAnalyst", fundamental_analyst)
         workflow.add_node("TechnicalAnalyst", technical_analyst)
         workflow.add_node("NewsSentimentAnalyst", news_sentiment_analyst)
         workflow.add_node("RiskMonitor", risk_monitor)
         workflow.add_node("BullResearcher", bull_researcher)
         workflow.add_node("BearResearcher", bear_researcher)
-        workflow.add_node("TradingStrategist", trading_strategist)
         workflow.add_node("ResearchDirector", research_director)
 
         workflow.set_entry_point("DataCollector")
-        workflow.add_edge("DataCollector", "InformationSummarizer")
+        workflow.add_edge("DataCollector", "ResearchSourceCollector")
 
+    workflow.add_edge("ResearchSourceCollector", "InformationSummarizer")
     workflow.add_edge("InformationSummarizer", "FundamentalAnalyst")
+    workflow.add_edge("InformationSummarizer", "MacroAnalyst")
     workflow.add_edge("InformationSummarizer", "TechnicalAnalyst")
     workflow.add_edge("InformationSummarizer", "NewsSentimentAnalyst")
     workflow.add_edge("NewsSentimentAnalyst", "RiskMonitor")
-    workflow.add_edge(["FundamentalAnalyst", "TechnicalAnalyst", "RiskMonitor"], "BullResearcher")
-    workflow.add_edge(["FundamentalAnalyst", "TechnicalAnalyst", "RiskMonitor"], "BearResearcher")
-    workflow.add_edge(["BullResearcher", "BearResearcher"], "TradingStrategist")
-    workflow.add_edge("TradingStrategist", "ResearchDirector")
+    workflow.add_edge(["FundamentalAnalyst", "TechnicalAnalyst", "MacroAnalyst", "RiskMonitor"], "BullResearcher")
+    workflow.add_edge(["FundamentalAnalyst", "TechnicalAnalyst", "MacroAnalyst", "RiskMonitor"], "BearResearcher")
+    workflow.add_edge(["BullResearcher", "BearResearcher"], "ResearchDirector")
     workflow.add_edge("ResearchDirector", END)
     return workflow.compile(name="InstitutionalResearchPipeline")
 
@@ -272,12 +279,45 @@ def aggregate_collected_data(states: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def research_source_collector(state: ResearchState) -> dict[str, Any]:
+    """Collect public research evidence before synthesis.
+
+    This is the core research-first step: public filings, existing report
+    metadata, macro context, and cross-channel analysis are gathered in
+    parallel and stored as typed evidence rather than being folded into a
+    free-form prompt.
+    """
+    fundamentals = state.get("fundamentals", {})
+    quote = state.get("quote", {})
+    company_name = str(
+        fundamentals.get("company_name")
+        or quote.get("name")
+        or state.get("symbol", "")
+    )
+    sector = str(fundamentals.get("sector") or quote.get("sector") or "")
+    try:
+        evidence_book = collect_research_evidence(
+            state["symbol"],
+            state["market"],
+            company_name=company_name,
+            sector=sector,
+        )
+        errors = list(state.get("errors", [])) + [
+            f"evidence: {item}" for item in evidence_book.errors
+        ]
+    except Exception as exc:
+        evidence_book = ResearchEvidenceBook(errors=[str(exc)])
+        errors = list(state.get("errors", [])) + [f"evidence: {exc}"]
+    return {"evidence_book": evidence_book, "errors": errors}
+
+
 def information_summarizer(state: ResearchState) -> dict[str, Any]:
     """Collect structured facts and non-structured notes for downstream agents."""
     quote = state.get("quote", {})
     fundamentals = state.get("fundamentals", {})
     history = state.get("history", [])
     sources = state.get("sources", [])
+    evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
 
     facts = [
         f"Symbol: {state['symbol']}, Market: {state['market']}",
@@ -294,6 +334,11 @@ def information_summarizer(state: ResearchState) -> dict[str, Any]:
     ]:
         if fundamentals.get(key) is not None:
             facts.append(f"{label}: {fundamentals.get(key)}")
+    facts.append(f"External research evidence: {evidence_book.total_items} public items")
+    if evidence_book.filings:
+        facts.append(f"Primary filing candidate: {evidence_book.filings[0].title}")
+    if evidence_book.institutional_reports:
+        facts.append(f"Institutional report candidate: {evidence_book.institutional_reports[0].title}")
 
     notes = []
     if history:
@@ -303,7 +348,11 @@ def information_summarizer(state: ResearchState) -> dict[str, Any]:
             notes.append(f"Period price change {(last / first - 1) * 100:.1f}% for momentum assessment.")
     if quote.get("name") or fundamentals.get("company_name"):
         notes.append(f"Company: {fundamentals.get('company_name') or quote.get('name')}")
-    notes.append("TradingAgents-style: collect facts first, then multi-role debate, then explainable strategy.")
+    for item in evidence_book.channel_analysis[:3]:
+        notes.append(f"Channel analysis: {item.title}")
+    for item in evidence_book.macro[:3]:
+        notes.append(f"Macro context: {item.title}")
+    notes.append("Research-first workflow: evidence collection, macro/fundamental analysis, challenge review, director synthesis.")
 
     gaps = []
     if not quote:
@@ -312,9 +361,15 @@ def information_summarizer(state: ResearchState) -> dict[str, Any]:
         gaps.append("Valuation or profitability indicators incomplete")
     if len(history) < 40:
         gaps.append(f"Historical price sample is short ({len(history)} bars)")
+    if not evidence_book.filings:
+        gaps.append("Primary filing or annual-report source not found")
+    if not evidence_book.institutional_reports:
+        gaps.append("Public institutional research report source not found")
     for item in sources:
         if item.get("error"):
             gaps.append(f"{item.get('source')}: {item.get('error')}")
+    for item in evidence_book.errors:
+        gaps.append(f"Evidence search: {item}")
 
     summary = "; ".join(facts[:4])
     return {
@@ -322,7 +377,8 @@ def information_summarizer(state: ResearchState) -> dict[str, Any]:
             structured_facts=facts,
             unstructured_notes=notes,
             data_gaps=gaps[:6],
-            source_count=len([item for item in sources if item.get("payload") is not None]),
+            source_count=len([item for item in sources if item.get("payload") is not None])
+            + evidence_book.total_items,
             summary=summary,
         )
     }
@@ -378,6 +434,54 @@ def fundamental_analyst(state: ResearchState) -> dict[str, Any]:
     return {"valuation": valuation, "financial_quality": quality}
 
 
+def macro_analyst(state: ResearchState) -> dict[str, Any]:
+    """Assess macro, policy, and cycle context from collected public evidence."""
+    evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
+    evidence_items = evidence_book.macro[:4]
+    news_items = [
+        item for item in evidence_book.news
+        if any(token in f"{item.title} {item.summary}".lower() for token in [
+            "macro",
+            "policy",
+            "rates",
+            "inflation",
+            "gdp",
+            "政策",
+            "利率",
+            "通胀",
+            "财政",
+            "周期",
+        ])
+    ][:3]
+    all_items = evidence_items + news_items
+
+    score = 50.0
+    if len(evidence_items) >= 2:
+        score += 8
+    if any(item.quality == "primary" for item in evidence_items):
+        score += 4
+    risk_terms = ("recession", "slowdown", "tightening", "监管", "下行", "衰退", "收缩")
+    if any(any(term in f"{item.title} {item.summary}".lower() for term in risk_terms) for item in all_items):
+        score -= 6
+
+    if evidence_items:
+        summary = (
+            f"Macro and policy context collected from {len(evidence_items)} public sources; "
+            "treat this as directional background until primary macro data is added."
+        )
+    else:
+        summary = "Macro context is thin; director should lower confidence and rely more on company-level evidence."
+
+    return {
+        "macro_context": AnalystView(
+            summary=summary,
+            score=_clamp(score),
+            evidence=[item.title for item in all_items[:6]],
+            data_quality="high" if len(evidence_items) >= 4 else ("limited" if evidence_items else "missing"),
+        )
+    }
+
+
 def technical_analyst(state: ResearchState) -> dict[str, Any]:
     from config.settings import get_settings
     cfg = get_settings().strategy
@@ -412,6 +516,7 @@ def technical_analyst(state: ResearchState) -> dict[str, Any]:
 
 
 def news_sentiment_analyst(state: ResearchState) -> dict[str, Any]:
+    evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
     try:
         symbol = state.get("symbol", "")
         news = fetch_financial_news(symbol=symbol, max_items=8)
@@ -420,8 +525,14 @@ def news_sentiment_analyst(state: ResearchState) -> dict[str, Any]:
         state.setdefault("errors", []).append(f"news: {exc}")
 
     evidence = [item.get("title", "") for item in news if item.get("title")]
-    summary = "Recent macro and market news is available." if evidence else "No fresh news feed available."
-    score = 52.0 if evidence else 45.0
+    evidence.extend(item.title for item in evidence_book.channel_analysis[:4])
+    evidence.extend(item.title for item in evidence_book.institutional_reports[:3])
+    summary = (
+        f"Collected {len(evidence)} news, channel, and institutional-analysis signals."
+        if evidence
+        else "No fresh news or channel-analysis feed available."
+    )
+    score = min(62.0, 48.0 + len(evidence) * 2.0) if evidence else 43.0
     return {
         "sentiment": AnalystView(
             summary=summary,
@@ -451,8 +562,8 @@ BULL_SYSTEM_PROMPT = """You are an OPTIMISTIC senior investment analyst. Your jo
 Given the same data the research team has collected, identify upside potential:
 - Undervaluation signals (low multiples relative to peers/growth)
 - Improving fundamentals (rising ROE, margin expansion, revenue acceleration)
-- Positive technical momentum (uptrend, constructive RSI, volume confirmation)
-- Favorable sentiment or overlooked catalysts
+- Supportive macro, policy, or industry-cycle context
+- Favorable public research, filings, sentiment, or overlooked catalysts
 - Hidden assets, growth optionality, or turnaround potential
 
 Rules:
@@ -470,8 +581,8 @@ BEAR_SYSTEM_PROMPT = """You are a SKEPTICAL senior investment analyst. Your job 
 Given the same data the research team has collected, identify downside risks:
 - Overvaluation signals (high multiples, deteriorating growth supporting the premium)
 - Weakening fundamentals (declining ROE, margin compression, rising leverage)
-- Negative technical momentum (downtrend, overbought RSI, bearish divergences)
-- Poor sentiment, competitive threats, or regulatory headwinds
+- Unfavorable macro, policy, or industry-cycle context
+- Poor sentiment, competitive threats, regulatory headwinds, or weak public research support
 - Hidden liabilities, execution risk, or structural decline
 
 Rules:
@@ -488,6 +599,7 @@ Return your analysis as a JSON object:
 def _build_data_context(state: ResearchState) -> str:
     """Assemble a structured data context string for LLM analysts."""
     info = state.get("information_summary")
+    evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
     facts = info.structured_facts if info else []
     notes = info.unstructured_notes if info else []
     gaps = info.data_gaps if info else []
@@ -500,13 +612,28 @@ def _build_data_context(state: ResearchState) -> str:
     parts.extend(f"- {f}" for f in facts)
     parts.extend(["", "### Analysis Scores"])
     for role, view in [
+        ("Macro Context", state.get("macro_context")),
         ("Valuation", state.get("valuation")),
         ("Financial Quality", state.get("financial_quality")),
-        ("Technical", state.get("technical")),
+        ("Price Context", state.get("technical")),
         ("Sentiment", state.get("sentiment")),
     ]:
         if view:
             parts.append(f"- {role}: {view.score:.0f}/100 — {view.summary}")
+    parts.extend(["", "### Public Research Evidence"])
+    for label, items in [
+        ("Macro", evidence_book.macro),
+        ("Filings", evidence_book.filings),
+        ("Institutional Reports", evidence_book.institutional_reports),
+        ("Channel Analysis", evidence_book.channel_analysis),
+        ("News", evidence_book.news),
+    ]:
+        if items:
+            parts.append(f"{label}:")
+            parts.extend(
+                f"- {item.title} ({item.quality}, {item.source}) {item.url}"
+                for item in items[:4]
+            )
     if notes:
         parts.extend(["", "### Additional Notes"])
         parts.extend(f"- {n}" for n in notes)
@@ -599,9 +726,12 @@ def _analyst_heuristic(state: ResearchState, role: str) -> AnalystView:
         if state["valuation"].score >= 60:
             evidence.append("Valuation appears reasonable.")
             score += 10
-        if state["technical"].score >= 60:
-            evidence.append("Technical setup is constructive.")
-            score += 10
+        if state.get("macro_context") and state["macro_context"].score >= 58:
+            evidence.append("Macro and policy context is not obviously hostile.")
+            score += 8
+        if state.get("evidence_book") and state["evidence_book"].institutional_reports:
+            evidence.append("Public institutional report candidates are available for cross-checking.")
+            score += 6
         if not evidence:
             evidence.append("Upside depends on execution and sentiment improvement.")
         return AnalystView(
@@ -616,9 +746,9 @@ def _analyst_heuristic(state: ResearchState, role: str) -> AnalystView:
         if state["valuation"].score <= 45:
             evidence.append("Valuation leaves limited margin of safety.")
             score -= 10
-        if state["technical"].score <= 45:
-            evidence.append("Technical setup is weak.")
-            score -= 10
+        if state.get("macro_context") and state["macro_context"].score <= 45:
+            evidence.append("Macro or policy context is weak or insufficiently supported.")
+            score -= 8
         if state["sentiment"].data_quality != "high":
             evidence.append("Sentiment coverage is incomplete.")
             score -= 5
@@ -744,9 +874,9 @@ def trading_strategist(state: ResearchState) -> dict[str, Any]:
 
 def research_director(state: ResearchState) -> dict[str, Any]:
     scores = [
+        state["macro_context"].score,
         state["valuation"].score,
         state["financial_quality"].score,
-        state["technical"].score,
         state["sentiment"].score,
     ]
     from config.settings import get_settings
@@ -760,9 +890,9 @@ def research_director(state: ResearchState) -> dict[str, Any]:
         rating = "HOLD"
     confidence = "high" if not state.get("errors") and min(scores) >= 45 else "medium"
     if state.get("errors") or any(view.data_quality == "missing" for view in [
+        state["macro_context"],
         state["valuation"],
         state["financial_quality"],
-        state["technical"],
         state["sentiment"],
     ]):
         confidence = "low"
@@ -782,6 +912,7 @@ def research_director(state: ResearchState) -> dict[str, Any]:
     )
     thesis = _thesis(state, rating, composite)
     llm_status = "not_used"
+    evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
 
     # Synthesize LLM debate if bull/bear views exist
     bull_view = state.get("_bull_view")
@@ -799,13 +930,17 @@ def research_director(state: ResearchState) -> dict[str, Any]:
             if bull_view and bear_view:
                 polish_prompt = (
                     "Synthesize this bull/bear debate into one concise "
-                    "institutional-style investment thesis paragraph. "
+                    "institutional-style investment thesis paragraph. Focus on macro, "
+                    "company fundamentals, filings, public research evidence, and risks. "
+                    "Do not give trading tactics. "
                     f"Current rating: {rating}. Data: {thesis}"
                 )
             else:
                 polish_prompt = (
                     "Rewrite this investment thesis in one concise "
-                    "institutional-style paragraph without changing facts: "
+                    "institutional-style paragraph without changing facts. Focus on macro, "
+                    "company fundamentals, filings, public research evidence, and risks. "
+                    "Do not give trading tactics: "
                     f"{thesis}"
                 )
             response = llm.invoke(polish_prompt)
@@ -823,6 +958,18 @@ def research_director(state: ResearchState) -> dict[str, Any]:
         )
         for item in state.get("sources", [])
     ]
+    for item in _flatten_evidence(evidence_book):
+        sources.append(
+            DataSource(
+                name=item.source or item.quality,
+                as_of=item.as_of,
+                stale=False,
+                error=None,
+                url=item.url,
+                channel=item.channel,
+                quality=item.quality,
+            )
+        )
 
     report = ResearchReport(
         run_id=state["run_id"],
@@ -837,6 +984,9 @@ def research_director(state: ResearchState) -> dict[str, Any]:
         key_metrics={
             "composite_score": round(composite, 2),
             "risk_penalty": round(penalty, 2),
+            "external_sources": evidence_book.total_items,
+            "primary_sources": len([item for item in _flatten_evidence(evidence_book) if item.quality == "primary"]),
+            "institutional_reports": len(evidence_book.institutional_reports),
             "pe_ratio": fundamentals.get("pe_ratio"),
             "pb_ratio": fundamentals.get("pb_ratio"),
             "roe": fundamentals.get("roe"),
@@ -845,10 +995,12 @@ def research_director(state: ResearchState) -> dict[str, Any]:
         },
         valuation=state["valuation"],
         financial_quality=state["financial_quality"],
+        macro_context=state["macro_context"],
         technical=state["technical"],
         sentiment=state["sentiment"],
         information_summary=state["information_summary"],
-        trading_strategy=state.get("trading_strategy"),
+        research_evidence=evidence_book,
+        trading_strategy=None,
         risk_alerts=alerts,
         pipeline_diagnostics=_build_pipeline_diagnostics(state, alerts, penalty),
         bull_case=state.get("bull_case", []),
@@ -883,11 +1035,14 @@ def _quality_summary(roe: float | None) -> str:
 
 
 def _thesis(state: ResearchState, rating: str, composite: float) -> str:
+    evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
     return (
         f"{state['symbol']} receives a {rating} rating with a composite score of "
-        f"{composite:.1f}. The conclusion balances valuation ({state['valuation'].score:.0f}), "
-        f"financial quality ({state['financial_quality'].score:.0f}), technical setup "
-        f"({state['technical'].score:.0f}), and sentiment ({state['sentiment'].score:.0f})."
+        f"{composite:.1f}. The conclusion balances macro context "
+        f"({state['macro_context'].score:.0f}), valuation ({state['valuation'].score:.0f}), "
+        f"financial quality ({state['financial_quality'].score:.0f}), and public-source "
+        f"sentiment ({state['sentiment'].score:.0f}), with {evidence_book.total_items} "
+        "external evidence items collected for audit."
     )
 
 
@@ -921,12 +1076,18 @@ def _clamp(value: float) -> float:
 def _build_catalysts(state: ResearchState) -> list[str]:
     """Generate dynamic catalysts based on actual analysis results."""
     catalysts = []
-    tech = state.get("technical")
+    macro = state.get("macro_context")
     val = state.get("valuation")
     quality = state.get("financial_quality")
     sentiment = state.get("sentiment")
     info = state.get("information_summary")
+    evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
 
+    if macro and macro.score >= 58:
+        catalysts.append(
+            f"Macro/policy context is at least supportive "
+            f"(score: {macro.score:.0f}/100)"
+        )
     if val and val.score >= 60:
         catalysts.append(
             f"Favorable valuation (score: {val.score:.0f}/100) "
@@ -937,14 +1098,13 @@ def _build_catalysts(state: ResearchState) -> list[str]:
             f"Financial quality metrics above threshold "
             f"(score: {quality.score:.0f}/100)"
         )
-    if tech and tech.score >= 60:
-        catalysts.append(
-            f"Constructive technical setup with positive momentum "
-            f"(score: {tech.score:.0f}/100)"
-        )
     if sentiment and sentiment.evidence:
         first = sentiment.evidence[0]
         catalysts.append(f"Market sentiment: {first[:120]}")
+    if evidence_book.filings:
+        catalysts.append(f"Primary filing to review: {evidence_book.filings[0].title[:120]}")
+    if evidence_book.institutional_reports:
+        catalysts.append(f"External report lead: {evidence_book.institutional_reports[0].title[:120]}")
     if info and info.data_gaps:
         catalysts.append(
             "Improved data coverage could reveal additional upside signals"
@@ -959,12 +1119,18 @@ def _build_catalysts(state: ResearchState) -> list[str]:
 def _build_risks(state: ResearchState) -> list[str]:
     """Generate dynamic risks based on actual analysis results."""
     risks = []
-    tech = state.get("technical")
+    macro = state.get("macro_context")
     val = state.get("valuation")
     quality = state.get("financial_quality")
     sentiment = state.get("sentiment")
     info = state.get("information_summary")
+    evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
 
+    if macro and macro.score < 45:
+        risks.append(
+            f"Macro, policy, or cycle context is weak or poorly evidenced "
+            f"(score: {macro.score:.0f}/100)"
+        )
     if val and val.score < 45:
         risks.append(
             f"Elevated valuation leaves limited margin of safety "
@@ -975,13 +1141,12 @@ def _build_risks(state: ResearchState) -> list[str]:
             f"Below-average profitability or financial quality "
             f"(score: {quality.score:.0f}/100)"
         )
-    if tech and tech.score < 45:
-        risks.append(
-            f"Weak technical setup or deteriorating indicators "
-            f"(score: {tech.score:.0f}/100)"
-        )
     if sentiment and sentiment.data_quality != "high":
         risks.append("Incomplete sentiment coverage reduces confidence")
+    if not evidence_book.filings:
+        risks.append("No primary filing or annual-report source was found in public search")
+    if not evidence_book.institutional_reports:
+        risks.append("No public institutional research report source was found")
     if info and info.data_gaps:
         gaps_text = ", ".join(info.data_gaps[:3])
         risks.append(f"Data gaps: {gaps_text}")
@@ -1003,9 +1168,10 @@ def _build_pipeline_diagnostics(
     penalty: float,
 ) -> PipelineDiagnostics:
     controls = [
-        "Bull and Bear researchers receive the same evidence and produce opposing cases.",
+        "Bull and Bear researchers receive the same evidence book and produce opposing cases.",
         "ResearchDirector caps BUY ratings when critical deterministic risk alerts exist.",
-        "Provider source/as_of/stale/error metadata is carried into the final report.",
+        "Provider and public-source metadata, URLs, quality labels, and gaps are carried into the final report.",
+        "Trading tactics are intentionally deferred; the current output is a research report, not a strategy signal.",
     ]
     if state.get("use_llm"):
         controls.append("LLM output is constrained by typed Pydantic report sections and deterministic scores.")
@@ -1013,14 +1179,15 @@ def _build_pipeline_diagnostics(
         topology="guarded_dag",
         latency_strategy=[
             "Quote, fundamentals, and history are fetched concurrently in DataCollector.",
-            "Fundamental, technical, and sentiment analysis branch after fact collection.",
+            "Public filing, macro, report, and channel-analysis searches run in parallel and are cached for 6 hours.",
+            "Macro, fundamental, price-context, and sentiment analysis branch after fact collection.",
             "RiskMonitor is deterministic and reuses collected payloads instead of another LLM call.",
         ],
         hallucination_controls=controls,
         validation_checks=[
             "Data gaps are surfaced before synthesis.",
-            "Risk alerts impose a numeric penalty before rating and strategy selection.",
-            "Final report stores all data sources for auditability.",
+            "Risk alerts impose a numeric penalty before rating.",
+            "Final report stores market-data sources and public evidence links for auditability.",
         ],
         confidence_adjustments=[
             f"Risk penalty applied: {penalty:.0f} points.",
@@ -1028,6 +1195,16 @@ def _build_pipeline_diagnostics(
             f"Provider errors: {len(state.get('errors', []))}.",
         ],
     )
+
+
+def _flatten_evidence(evidence_book: ResearchEvidenceBook) -> list:
+    return [
+        *evidence_book.macro,
+        *evidence_book.filings,
+        *evidence_book.institutional_reports,
+        *evidence_book.channel_analysis,
+        *evidence_book.news,
+    ]
 
 
 def _extract_indicator(evidence: list[str], key: str) -> float | None:

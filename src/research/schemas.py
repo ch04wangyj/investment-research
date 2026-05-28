@@ -7,6 +7,14 @@ from pydantic import BaseModel, Field
 
 
 Rating = Literal["BUY", "HOLD", "SELL"]
+EvidenceChannel = Literal[
+    "macro",
+    "filing",
+    "institutional_report",
+    "channel_analysis",
+    "news",
+]
+EvidenceQuality = Literal["primary", "institutional", "media", "search", "unknown"]
 AlertSeverity = Literal["info", "watch", "warning", "critical"]
 RiskCategory = Literal[
     "drawdown",
@@ -22,6 +30,9 @@ class DataSource(BaseModel):
     as_of: str | None = None
     stale: bool = False
     error: str | None = None
+    url: str | None = None
+    channel: str | None = None
+    quality: str | None = None
 
 
 class AnalystView(BaseModel):
@@ -37,6 +48,40 @@ class InformationSummary(BaseModel):
     data_gaps: list[str] = Field(default_factory=list)
     source_count: int = 0
     summary: str = ""
+
+
+class EvidenceItem(BaseModel):
+    channel: EvidenceChannel
+    title: str
+    summary: str = ""
+    url: str = ""
+    source: str = ""
+    quality: EvidenceQuality = "unknown"
+    query: str = ""
+    as_of: str | None = None
+    score: float = Field(default=0, ge=0, le=100)
+
+
+class ResearchEvidenceBook(BaseModel):
+    macro: list[EvidenceItem] = Field(default_factory=list)
+    filings: list[EvidenceItem] = Field(default_factory=list)
+    institutional_reports: list[EvidenceItem] = Field(default_factory=list)
+    channel_analysis: list[EvidenceItem] = Field(default_factory=list)
+    news: list[EvidenceItem] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+    @property
+    def total_items(self) -> int:
+        return sum(
+            len(items)
+            for items in [
+                self.macro,
+                self.filings,
+                self.institutional_reports,
+                self.channel_analysis,
+                self.news,
+            ]
+        )
 
 
 class TradingStrategy(BaseModel):
@@ -86,9 +131,25 @@ class ResearchReport(BaseModel):
     key_metrics: dict[str, Any] = Field(default_factory=dict)
     valuation: AnalystView
     financial_quality: AnalystView
-    technical: AnalystView
+    macro_context: AnalystView = Field(
+        default_factory=lambda: AnalystView(
+            summary="Macro context has not been collected.",
+            score=50,
+            evidence=[],
+            data_quality="limited",
+        )
+    )
+    technical: AnalystView = Field(
+        default_factory=lambda: AnalystView(
+            summary="Technical strategy is deferred in the current research-first workflow.",
+            score=50,
+            evidence=[],
+            data_quality="limited",
+        )
+    )
     sentiment: AnalystView
     information_summary: InformationSummary = Field(default_factory=InformationSummary)
+    research_evidence: ResearchEvidenceBook = Field(default_factory=ResearchEvidenceBook)
     trading_strategy: TradingStrategy | None = None
     risk_alerts: list[RiskAlert] = Field(default_factory=list)
     pipeline_diagnostics: PipelineDiagnostics = Field(default_factory=PipelineDiagnostics)

@@ -50,6 +50,27 @@ export type AnalystView = {
   data_quality: "high" | "limited" | "missing";
 };
 
+export type EvidenceItem = {
+  channel: "macro" | "filing" | "institutional_report" | "channel_analysis" | "news";
+  title: string;
+  summary: string;
+  url: string;
+  source: string;
+  quality: "primary" | "institutional" | "media" | "search" | "unknown";
+  query: string;
+  as_of?: string | null;
+  score: number;
+};
+
+export type ResearchEvidenceBook = {
+  macro: EvidenceItem[];
+  filings: EvidenceItem[];
+  institutional_reports: EvidenceItem[];
+  channel_analysis: EvidenceItem[];
+  news: EvidenceItem[];
+  errors: string[];
+};
+
 export type RiskAlert = {
   id: string;
   symbol: string;
@@ -86,6 +107,7 @@ export type ResearchReport = {
   key_metrics: Record<string, unknown>;
   valuation: AnalystView;
   financial_quality: AnalystView;
+  macro_context: AnalystView;
   technical: AnalystView;
   sentiment: AnalystView;
   information_summary: {
@@ -95,6 +117,7 @@ export type ResearchReport = {
     source_count: number;
     summary: string;
   };
+  research_evidence: ResearchEvidenceBook;
   trading_strategy?: {
     action: "accumulate" | "hold" | "reduce" | "avoid";
     horizon: "swing" | "position" | "long_term";
@@ -117,7 +140,15 @@ export type ResearchReport = {
   bear_case: string[];
   catalysts: string[];
   risks: string[];
-  sources: { name: string; as_of?: string; stale: boolean; error?: string | null }[];
+  sources: {
+    name: string;
+    as_of?: string;
+    stale: boolean;
+    error?: string | null;
+    url?: string | null;
+    channel?: string | null;
+    quality?: string | null;
+  }[];
   llm_status: string;
   disclaimer: string;
 };
