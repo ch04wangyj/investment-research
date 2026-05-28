@@ -15,6 +15,7 @@ from src.data.dal import detect_market, get_dal, normalize_symbol
 from src.data.indices import fetch_all_indices
 from src.data.news_fetcher import fetch_financial_news
 from src.research.schemas import ResearchRequest
+from src.risk.alerts import evaluate_market_risks, evaluate_symbol_risk, summarize_alerts
 from src.storage.repository import AgentReportRepository, TrackedSymbolRepository
 
 app = FastAPI(
@@ -105,7 +106,7 @@ def market_overview() -> dict[str, Any]:
     except Exception:
         indices = []
     try:
-        news = fetch_financial_news(max_items=8)
+        news = fetch_financial_news(max_items=18)
     except Exception:
         news = []
     return {
@@ -115,6 +116,25 @@ def market_overview() -> dict[str, Any]:
         "quotes": quotes,
         "sectors": build_sector_summary(symbols, quotes),
         "ratings": build_rating_summary(),
+    }
+
+
+@app.get("/api/risk/alerts")
+def risk_alerts(limit: int = 12, period: str = "6mo") -> dict[str, Any]:
+    symbols = _symbol_repo().get_active()
+    result = evaluate_market_risks(symbols, limit=max(1, min(limit, 50)), period=period)
+    return jsonable_encoder(result)
+
+
+@app.get("/api/risk/alerts/{symbol}")
+def symbol_risk_alerts(symbol: str, period: str = "6mo") -> dict[str, Any]:
+    normalized = normalize_symbol(symbol)
+    alerts = evaluate_symbol_risk(normalized, period=period)
+    return {
+        "symbol": normalized,
+        "market": detect_market(normalized),
+        "alerts": jsonable_encoder(alerts),
+        "summary": summarize_alerts(alerts),
     }
 
 
@@ -222,10 +242,19 @@ def assistant_analysis(symbol: str, request: AssistantRequest | None = None) -> 
 
     info = content.get("information_summary", {}) or {}
     strategy = content.get("trading_strategy", {}) or {}
+    risk_items = content.get("risk_alerts", []) or []
     rating = content.get("rating", "HOLD")
     response = [
         f"信息收集员：{info.get('summary') or '已完成基础行情、历史价格和可得基本面扫描。'}",
         "非结构观察：" + "；".join((info.get("unstructured_notes") or [])[:3]),
+        (
+            "风险提醒员："
+            + "；".join(
+                f"{item.get('severity', 'info')} {item.get('title', '')}"
+                for item in risk_items[:3]
+                if isinstance(item, dict)
+            )
+        ),
         (
             f"交易策略员：当前评级 {rating}，策略动作 {strategy.get('action', 'hold')}，"
             f"建议仓位 {strategy.get('position_size_pct', 0)}%，入场区间 {strategy.get('entry_zone', '-')}"

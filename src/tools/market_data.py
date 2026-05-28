@@ -64,18 +64,28 @@ def get_fundamentals(symbol: str) -> dict[str, Any]:
 
 @tool
 def get_financial_news(symbol: str) -> str:
-    """Search for recent financial news about a stock.
+    """Get recent financial news headlines for a stock.
 
-    Currently uses web search; in Phase 2 this will integrate Finnhub/news APIs.
+    Fetches symbol-specific news where available; falls back to general
+    financial news headlines. Works for A-shares, HK, and US stocks.
 
     Args:
-        symbol: Stock ticker symbol (add company name for better results)
+        symbol: Stock ticker symbol
     """
     logger.info(f"Tool: get_financial_news({symbol})")
-    # Placeholder — Phase 2 will integrate Finnhub/SerpAPI
-    # For now, returns a note that the LLM should use web_search instead
-    return (
-        f"News data for {symbol} is not yet available via direct API. "
-        f"Use the web_search tool to find recent news about {symbol}. "
-        f"In Phase 2, this will integrate Finnhub and RSS feeds."
-    )
+    try:
+        from src.data.news_fetcher import fetch_financial_news
+        news = fetch_financial_news(symbol=symbol, max_items=5)
+    except Exception:
+        news = []
+
+    if not news:
+        return f"No recent news found for {symbol}. Try web_search for broader coverage."
+
+    lines = [f"Recent news for {symbol}:"]
+    for item in news:
+        lines.append(
+            f"- [{item.get('display_time', '')}] {item['title']}"
+            f" ({item.get('source', '')})"
+        )
+    return "\n".join(lines)

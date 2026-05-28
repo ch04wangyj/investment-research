@@ -45,7 +45,7 @@ def test_research_pipeline_returns_typed_report(monkeypatch):
     monkeypatch.setattr(
         research_graph,
         "fetch_financial_news",
-        lambda max_items=5: [{"title": "Market breadth improves"}],
+        lambda symbol=None, max_items=5: [{"title": "Market breadth improves"}],
     )
     report = research_graph.run_research_pipeline("AAPL")
     assert isinstance(report, ResearchReport)
@@ -55,3 +55,5 @@ def test_research_pipeline_returns_typed_report(monkeypatch):
     assert report.information_summary.structured_facts
     assert report.trading_strategy is not None
     assert report.trading_strategy.action in {"accumulate", "hold", "reduce", "avoid"}
+    assert isinstance(report.risk_alerts, list)
+    assert report.pipeline_diagnostics.topology == "guarded_dag"

@@ -30,7 +30,13 @@ def main():
         provider_id=args.provider,
         use_llm=args.use_llm,
     )
-    print(report.model_dump_json(indent=2))
+    # Handle Windows GBK console encoding
+    json_output = report.model_dump_json(indent=2)
+    try:
+        print(json_output)
+    except UnicodeEncodeError:
+        sys.stdout.reconfigure(encoding="utf-8")
+        print(json_output)
 
     if args.save_db:
         from src.storage.repository import AgentReportRepository

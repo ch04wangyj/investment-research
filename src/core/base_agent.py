@@ -13,8 +13,7 @@ Borrowed from:
 from typing import Any, Callable
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, ToolMessage
-from langchain_core.runnables import Runnable
+from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
@@ -23,7 +22,10 @@ from langgraph.prebuilt import ToolNode
 
 from src.core.state import AgentState
 
-MAX_TOOL_CALLS = 25  # Hard limit per agent run (from TradingAgents)
+
+def _get_max_tool_calls() -> int:
+    from config.settings import get_settings
+    return get_settings().max_tool_calls
 
 
 def _create_agent_node(
@@ -59,8 +61,9 @@ def _create_agent_node(
         # Track tool calls (TradingAgents pattern)
         count = state.get("tool_call_count", 0)
 
+        max_calls = _get_max_tool_calls()
         # Soft limit warning (Dexter pattern)
-        if count >= MAX_TOOL_CALLS * 0.7 and hasattr(response, "tool_calls") and response.tool_calls:
+        if count >= max_calls * 0.7 and hasattr(response, "tool_calls") and response.tool_calls:
             response.content += (
                 f"\n\n[Note: You have made {count} tool calls. "
                 f"Consider whether more are necessary.]"
@@ -82,7 +85,7 @@ def _should_continue(state: AgentState) -> str:
     count = state.get("tool_call_count", 0)
 
     # Hard limit reached — force end
-    if count >= MAX_TOOL_CALLS:
+    if count >= _get_max_tool_calls():
         return END
 
     # LLM requested tools -> execute
@@ -166,6 +169,9 @@ async def run_agent(
     Returns:
         Final AgentState with messages and (optionally) structured_output
     """
+    import asyncio
+    from config.settings import get_settings
+
     initial_state: AgentState = {
         "messages": [{"role": "user", "content": user_input}],
         "tool_call_count": 0,
@@ -174,7 +180,11 @@ async def run_agent(
     }
 
     config = {"configurable": {"thread_id": thread_id}}
-    final_state = await agent.ainvoke(initial_state, config)
+    timeout = get_settings().agent_timeout_seconds
+    final_state = await asyncio.wait_for(
+        agent.ainvoke(initial_state, config),
+        timeout=timeout,
+    )
     return final_state
 
 
@@ -185,6 +195,9 @@ def run_agent_sync(
     thread_id: str = "default",
 ) -> AgentState:
     """Synchronous version of run_agent (for Streamlit / scripts)."""
+    import concurrent.futures
+    from config.settings import get_settings
+
     initial_state: AgentState = {
         "messages": [{"role": "user", "content": user_input}],
         "tool_call_count": 0,
@@ -193,5 +206,14 @@ def run_agent_sync(
     }
 
     config = {"configurable": {"thread_id": thread_id}}
-    final_state = agent.invoke(initial_state, config)
+    timeout = get_settings().agent_timeout_seconds
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(agent.invoke, initial_state, config)
+        try:
+            final_state = future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError(
+                f"Agent '{thread_id}' timed out after {timeout}s"
+            )
     return final_state

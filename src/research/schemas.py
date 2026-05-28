@@ -7,6 +7,14 @@ from pydantic import BaseModel, Field
 
 
 Rating = Literal["BUY", "HOLD", "SELL"]
+AlertSeverity = Literal["info", "watch", "warning", "critical"]
+RiskCategory = Literal[
+    "drawdown",
+    "policy_event",
+    "cycle_shift",
+    "earnings_season",
+    "data_quality",
+]
 
 
 class DataSource(BaseModel):
@@ -42,6 +50,28 @@ class TradingStrategy(BaseModel):
     invalidation: list[str] = Field(default_factory=list)
 
 
+class RiskAlert(BaseModel):
+    id: str
+    symbol: str
+    market: Literal["ashare", "hk", "us"]
+    severity: AlertSeverity
+    category: RiskCategory
+    title: str
+    message: str
+    evidence: list[str] = Field(default_factory=list)
+    source: str = "risk_engine"
+    triggered_at: datetime = Field(default_factory=datetime.now)
+    action_hint: str = ""
+
+
+class PipelineDiagnostics(BaseModel):
+    topology: str = "guarded_dag"
+    latency_strategy: list[str] = Field(default_factory=list)
+    hallucination_controls: list[str] = Field(default_factory=list)
+    validation_checks: list[str] = Field(default_factory=list)
+    confidence_adjustments: list[str] = Field(default_factory=list)
+
+
 class ResearchReport(BaseModel):
     run_id: str
     symbol: str
@@ -60,6 +90,8 @@ class ResearchReport(BaseModel):
     sentiment: AnalystView
     information_summary: InformationSummary = Field(default_factory=InformationSummary)
     trading_strategy: TradingStrategy | None = None
+    risk_alerts: list[RiskAlert] = Field(default_factory=list)
+    pipeline_diagnostics: PipelineDiagnostics = Field(default_factory=PipelineDiagnostics)
     bull_case: list[str] = Field(default_factory=list)
     bear_case: list[str] = Field(default_factory=list)
     catalysts: list[str] = Field(default_factory=list)

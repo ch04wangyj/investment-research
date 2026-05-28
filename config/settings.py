@@ -7,8 +7,59 @@ Sensitive defaults are empty; required keys raise validation errors at startup.
 from pathlib import Path
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class StrategyConfig(BaseModel):
+    """Configurable thresholds for trading strategy and research scoring."""
+
+    # Composite score thresholds
+    buy_threshold: float = 62.0
+    sell_threshold: float = 42.0
+    accumulate_threshold: float = 65.0
+    avoid_threshold: float = 48.0
+    reduce_threshold_high: float = 42.0
+    reduce_threshold_low: float = 35.0
+
+    # Position sizing (percentage of portfolio)
+    accumulate_position_pct: float = 12.0
+    hold_position_pct: float = 8.0
+    reduce_position_pct: float = 4.0
+    reduce_min_position_pct: float = 0.0
+
+    # Risk management
+    risk_band_min: float = 0.05
+    risk_band_max: float = 0.14
+    risk_band_default: float = 0.07
+    take_profit_multiplier: float = 1.8
+
+    # Technical indicator thresholds
+    rsi_overbought: float = 75.0
+    rsi_oversold: float = 25.0
+    rsi_neutral_low: float = 45.0
+    rsi_neutral_high: float = 65.0
+    momentum_min_trend: float = 5.0
+    trend_uptrend_bonus: float = 18.0
+    trend_downtrend_penalty: float = 18.0
+    rsi_neutral_bonus: float = 6.0
+    rsi_overbought_penalty: float = 8.0
+    rsi_oversold_bonus: float = 4.0
+
+    # Valuation thresholds
+    pe_low: float = 18.0
+    pe_high: float = 45.0
+    pb_low: float = 2.5
+    pb_high: float = 8.0
+    roe_high: float = 0.18
+    roe_low: float = 0.06
+    valuation_pe_bonus: float = 15.0
+    valuation_pe_penalty: float = 15.0
+    valuation_pb_bonus: float = 10.0
+    valuation_pb_penalty: float = 10.0
+
+    # Data quality
+    min_history_samples: int = 40
 
 
 class Settings(BaseSettings):
@@ -71,6 +122,9 @@ class Settings(BaseSettings):
     # Agent limits
     max_tool_calls: int = 25
     agent_timeout_seconds: int = 120
+
+    # Strategy configuration
+    strategy: StrategyConfig = Field(default_factory=StrategyConfig)
 
     # Cache TTL (seconds)
     cache_ttl_market_data_l1: int = 900   # 15 min in-memory

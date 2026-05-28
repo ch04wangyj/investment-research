@@ -50,6 +50,28 @@ export type AnalystView = {
   data_quality: "high" | "limited" | "missing";
 };
 
+export type RiskAlert = {
+  id: string;
+  symbol: string;
+  market: "ashare" | "hk" | "us";
+  severity: "info" | "watch" | "warning" | "critical";
+  category: "drawdown" | "policy_event" | "cycle_shift" | "earnings_season" | "data_quality";
+  title: string;
+  message: string;
+  evidence: string[];
+  source: string;
+  triggered_at: string;
+  action_hint: string;
+};
+
+export type RiskSummary = {
+  total: number;
+  symbols: number;
+  by_severity: Record<string, number>;
+  by_category: Record<string, number>;
+  highest: string;
+};
+
 export type ResearchReport = {
   run_id: string;
   symbol: string;
@@ -83,6 +105,14 @@ export type ResearchReport = {
     rationale: string[];
     invalidation: string[];
   } | null;
+  risk_alerts: RiskAlert[];
+  pipeline_diagnostics: {
+    topology: string;
+    latency_strategy: string[];
+    hallucination_controls: string[];
+    validation_checks: string[];
+    confidence_adjustments: string[];
+  };
   bull_case: string[];
   bear_case: string[];
   catalysts: string[];

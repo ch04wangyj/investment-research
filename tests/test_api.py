@@ -45,3 +45,13 @@ def test_run_research_endpoint_with_mock_pipeline(monkeypatch):
     response = client.post("/api/research/AAPL", json={"use_llm": False})
     assert response.status_code == 200
     assert response.json()["report"]["symbol"] == "AAPL"
+
+
+def test_symbol_risk_alert_endpoint(monkeypatch):
+    monkeypatch.setattr("src.api.main.evaluate_symbol_risk", lambda symbol, period="6mo": [])
+    client = TestClient(app)
+    response = client.get("/api/risk/alerts/AAPL")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["symbol"] == "AAPL"
+    assert data["summary"]["total"] == 0

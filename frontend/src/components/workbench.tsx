@@ -5,22 +5,30 @@ import {
   Activity,
   AlertCircle,
   BarChart3,
+  Bell,
   Bot,
   Brain,
+  CalendarClock,
+  ChevronDown,
+  ChevronUp,
   CheckCircle2,
   ClipboardList,
   Database,
   FileText,
+  FolderOpen,
   Gauge,
   Layers3,
   Loader2,
   MessageSquareText,
+  Newspaper,
   RefreshCw,
   Search,
   Settings2,
+  ShieldAlert,
   Sparkles,
   Target,
   TrendingUp,
+  Zap,
 } from "lucide-react";
 
 import { PriceChart } from "@/components/price-chart";
@@ -30,7 +38,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -42,6 +49,8 @@ import {
   type Quote,
   type RatingSummary,
   type ResearchReport,
+  type RiskAlert,
+  type RiskSummary,
   type SectorSummary,
   type SymbolItem,
   type SymbolProfile,
@@ -63,6 +72,13 @@ type Overview = {
   ratings?: RatingSummary;
 };
 
+type RiskResponse = {
+  symbol?: string;
+  market?: string;
+  alerts: RiskAlert[];
+  summary: RiskSummary;
+};
+
 type RunSummary = {
   id: number;
   run_id: string;
@@ -80,6 +96,14 @@ const defaultOverview: Overview = {
   quotes: [],
 };
 
+const defaultRiskSummary: RiskSummary = {
+  total: 0,
+  symbols: 0,
+  by_severity: { critical: 0, warning: 0, watch: 0, info: 0 },
+  by_category: {},
+  highest: "info",
+};
+
 export function Workbench() {
   const [health, setHealth] = useState<Health | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -93,11 +117,15 @@ export function Workbench() {
   const [sectorFilter, setSectorFilter] = useState("all");
   const [ratingFilter, setRatingFilter] = useState("all");
   const [assistantMessages, setAssistantMessages] = useState<string[]>([]);
+  const [riskAlerts, setRiskAlerts] = useState<RiskAlert[]>([]);
+  const [riskSummary, setRiskSummary] = useState<RiskSummary>(defaultRiskSummary);
   const [report, setReport] = useState<ResearchReport | null>(null);
   const [profile, setProfile] = useState<SymbolProfile | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [assistantLoading, setAssistantLoading] = useState(false);
+  const [riskLoading, setRiskLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
@@ -130,6 +158,23 @@ export function Workbench() {
       .catch((err) => {
         setError(`市场概览加载较慢或失败：${err instanceof Error ? err.message : String(err)}`);
       });
+    void refreshRisk();
+  }
+
+  async function refreshRisk(targetSymbol?: string) {
+    const clean = targetSymbol?.trim().toUpperCase();
+    setRiskLoading(true);
+    try {
+      const response = clean
+        ? await apiGet<RiskResponse>(`/api/risk/alerts/${clean}?period=${period}`)
+        : await apiGet<RiskResponse>("/api/risk/alerts?limit=12");
+      setRiskAlerts(response.alerts);
+      setRiskSummary(response.summary);
+    } catch (err) {
+      setError(`风险提醒加载失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setRiskLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -137,6 +182,7 @@ export function Workbench() {
       void refresh();
     }, 0);
     return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function runResearch(targetSymbol?: string) {
@@ -155,6 +201,8 @@ export function Workbench() {
         apiGet<SymbolProfile>(`/api/symbols/${clean}?period=${period}`).catch(() => null),
       ]);
       setReport(researchResponse.report);
+      setRiskAlerts(researchResponse.report.risk_alerts || []);
+      setRiskSummary(buildRiskSummary(researchResponse.report.risk_alerts || []));
       setProfile(profileResponse);
       const latestRuns = await apiGet<{ runs: RunSummary[] }>("/api/research/runs").catch(() => null);
       if (latestRuns) setRuns(latestRuns.runs);
@@ -171,7 +219,10 @@ export function Workbench() {
     setReport(null);
     setAssistantMessages([]);
     if (!loadProfile) return;
-    const nextProfile = await apiGet<SymbolProfile>(`/api/symbols/${clean}?period=${period}`).catch(() => null);
+    const [nextProfile] = await Promise.all([
+      apiGet<SymbolProfile>(`/api/symbols/${clean}?period=${period}`).catch(() => null),
+      refreshRisk(clean),
+    ]);
     setProfile(nextProfile);
   }
 
@@ -188,7 +239,11 @@ export function Workbench() {
         question,
       });
       setAssistantMessages(response.messages);
-      if (response.report) setReport(response.report);
+      if (response.report) {
+        setReport(response.report);
+        setRiskAlerts(response.report.risk_alerts || []);
+        setRiskSummary(buildRiskSummary(response.report.risk_alerts || []));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -199,6 +254,10 @@ export function Workbench() {
   const providerCount = useMemo(
     () => health ? Object.values(health.providers).flat().length : 0,
     [health],
+  );
+  const activeRiskCount = useMemo(
+    () => riskAlerts.filter((item) => item.severity !== "info").length,
+    [riskAlerts],
   );
   const latestRatingBySymbol = useMemo(() => {
     const map = new Map<string, string>();
@@ -243,6 +302,14 @@ export function Workbench() {
               <RefreshCw className="mr-2 h-4 w-4" />
               Refresh
             </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="打开配置"
+              onClick={() => setShowSettings((value) => !value)}
+            >
+              <Settings2 className="h-4 w-4" />
+            </Button>
           </div>
         </header>
 
@@ -256,19 +323,21 @@ export function Workbench() {
           </Alert>
         ) : null}
 
-        <section className="grid gap-4 md:grid-cols-4">
+        <section className="grid gap-4 md:grid-cols-5">
           <MetricCard icon={<Gauge />} label="Tracked Symbols" value={overview.watchlist.length} />
           <MetricCard icon={<Database />} label="Provider Routes" value={providerCount} />
           <MetricCard icon={<FileText />} label="Research Runs" value={runs.length} />
+          <MetricCard icon={<ShieldAlert />} label="Risk Alerts" value={activeRiskCount} />
           <MetricCard icon={<Activity />} label="API Version" value={health?.version || "0.2.0"} />
         </section>
 
         <Tabs defaultValue="overview" className="space-y-5">
-          <TabsList className="grid h-auto w-full grid-cols-2 rounded-lg bg-white p-1 shadow-sm md:w-[920px] md:grid-cols-6">
+          <TabsList className="grid h-auto w-full grid-cols-2 rounded-lg bg-white p-1 shadow-sm md:w-[1040px] md:grid-cols-7">
             <TabsTrigger value="overview">市场概览</TabsTrigger>
             <TabsTrigger value="universe">股票池</TabsTrigger>
             <TabsTrigger value="research">单股研究</TabsTrigger>
             <TabsTrigger value="assistant">Agent助手</TabsTrigger>
+            <TabsTrigger value="risk">风险提醒</TabsTrigger>
             <TabsTrigger value="strategy">策略评级</TabsTrigger>
             <TabsTrigger value="reports">报告历史</TabsTrigger>
           </TabsList>
@@ -329,6 +398,20 @@ export function Workbench() {
             />
           </TabsContent>
 
+          <TabsContent value="risk" className="space-y-5">
+            <RiskCenterTab
+              symbol={symbol}
+              watchlist={overview.watchlist}
+              alerts={riskAlerts}
+              summary={riskSummary}
+              loading={riskLoading}
+              report={report}
+              onSelect={(next) => void selectSymbol(next)}
+              onRefresh={(next) => void refreshRisk(next)}
+              onRefreshAll={() => void refreshRisk()}
+            />
+          </TabsContent>
+
           <TabsContent value="strategy" className="space-y-5">
             <StrategyTab overview={overview} runs={runs} report={report} onSelect={(next) => void selectSymbol(next)} />
           </TabsContent>
@@ -338,7 +421,7 @@ export function Workbench() {
           </TabsContent>
         </Tabs>
 
-        <SettingsTab health={health} providers={providers} />
+        {showSettings ? <SettingsTab health={health} providers={providers} /> : null}
       </div>
     </main>
   );
@@ -427,27 +510,91 @@ function OverviewTab({ loading, overview }: { loading: boolean; overview: Overvi
 
         <Card className="rounded-lg border-white/80 bg-white shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base">新闻与政策</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Newspaper className="h-4 w-4" />
+              新闻与政策目录
+            </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {overview.news.slice(0, 8).map((item, index) => (
-              <div key={`${String(item.title)}-${index}`}>
-                <a
-                  href={String(item.url || "#")}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="line-clamp-2 text-sm font-medium text-zinc-950 hover:text-blue-600"
-                >
-                  {String(item.title || "Untitled")}
-                </a>
-                <p className="mt-1 text-xs text-zinc-500">{String(item.display_time || item.source || "")}</p>
-                {index < overview.news.slice(0, 8).length - 1 ? <Separator className="mt-4" /> : null}
-              </div>
-            ))}
+          <CardContent>
+            <NewsDirectory items={overview.news} />
           </CardContent>
         </Card>
       </section>
     </>
+  );
+}
+
+function NewsDirectory({ items }: { items: Array<Record<string, unknown>> }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [filter, setFilter] = useState("all");
+  const filtered = items.filter((item) => filter === "all" || newsCategory(item) === filter);
+  const filters = [
+    ["all", "全部"],
+    ["policy", "政策"],
+    ["earnings", "财报"],
+    ["macro", "宏观"],
+    ["market", "市场"],
+  ];
+
+  if (!items.length) {
+    return <div className="rounded-lg border border-dashed bg-zinc-50 p-6 text-sm text-zinc-500">暂无新闻流。</div>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {filters.map(([value, label]) => (
+          <Button
+            key={value}
+            size="sm"
+            variant={filter === value ? "default" : "outline"}
+            onClick={() => setFilter(value)}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      <div className="space-y-2">
+        {filtered.slice(0, 14).map((item, index) => {
+          const id = `${String(item.title || "news")}-${index}`;
+          const open = expanded === id;
+          return (
+            <div key={id} className="rounded-lg border bg-zinc-50">
+              <button
+                onClick={() => setExpanded(open ? null : id)}
+                className="flex w-full items-start justify-between gap-3 px-3 py-3 text-left"
+              >
+                <span>
+                  <span className="line-clamp-2 text-sm font-medium text-zinc-950">{String(item.title || "Untitled")}</span>
+                  <span className="mt-1 block text-xs text-zinc-500">
+                    {riskCategoryLabel(newsCategory(item))} · {String(item.display_time || item.source || "")}
+                  </span>
+                </span>
+                {open ? <ChevronUp className="mt-1 h-4 w-4 shrink-0 text-zinc-500" /> : <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-zinc-500" />}
+              </button>
+              {open ? (
+                <div className="border-t px-3 py-3 text-sm leading-6 text-zinc-700">
+                  <p>{String(item.summary || "无摘要")}</p>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <Badge variant="secondary" className="rounded-md">{String(item.source || "news")}</Badge>
+                    {item.url ? (
+                      <a
+                        href={String(item.url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs font-medium text-blue-600 hover:text-blue-700"
+                      >
+                        打开原文
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -688,8 +835,14 @@ function ReportSummary({ report }: { report: ResearchReport | null }) {
           <MiniMetric label="Price" value={formatNumber(report.current_price)} />
           <MiniMetric label="Target 6M" value={formatNumber(report.price_target_6m)} />
           <MiniMetric label="Confidence" value={report.confidence} />
-          <MiniMetric label="LLM" value={report.llm_status} />
+          <MiniMetric label="Risk Alerts" value={(report.risk_alerts || []).filter((item) => item.severity !== "info").length} />
         </div>
+        {(report.risk_alerts || []).some((item) => item.severity !== "info") ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
+            {(report.risk_alerts || []).filter((item) => item.severity !== "info")[0]?.title}
+            ：{(report.risk_alerts || []).filter((item) => item.severity !== "info")[0]?.message}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -747,6 +900,26 @@ function ReportDetail({ report }: { report: ResearchReport }) {
           ) : (
             <p className="text-sm text-zinc-500">暂无交易策略。</p>
           )}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm lg:col-span-4">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between text-base">
+            <span className="flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4" />
+              风险提醒与架构校验
+            </span>
+            <Badge variant="secondary" className="rounded-md">{report.pipeline_diagnostics?.topology || "guarded_dag"}</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+          <RiskAlertList alerts={report.risk_alerts || []} compact />
+          <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-1">
+            <InfoList title="降延迟" items={report.pipeline_diagnostics?.latency_strategy || []} />
+            <InfoList title="防单向幻觉" items={report.pipeline_diagnostics?.hallucination_controls || []} />
+            <InfoList title="置信度调整" items={report.pipeline_diagnostics?.confidence_adjustments || []} tone="warning" />
+          </div>
         </CardContent>
       </Card>
 
@@ -860,6 +1033,118 @@ function AssistantTab(props: {
         </CardContent>
       </Card>
       <AgentAssistantCard messages={props.messages} loading={props.loading} onAsk={() => props.onAsk(question)} report={props.report} />
+    </section>
+  );
+}
+
+function RiskCenterTab(props: {
+  symbol: string;
+  watchlist: SymbolItem[];
+  alerts: RiskAlert[];
+  summary: RiskSummary;
+  loading: boolean;
+  report: ResearchReport | null;
+  onSelect: (symbol: string) => void;
+  onRefresh: (symbol: string) => void;
+  onRefreshAll: () => void;
+}) {
+  const severityItems = [
+    ["critical", "严重"],
+    ["warning", "警告"],
+    ["watch", "观察"],
+    ["info", "提示"],
+  ] as const;
+
+  return (
+    <section className="grid gap-5 lg:grid-cols-[0.78fr_1.22fr]">
+      <div className="space-y-5">
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Bell className="h-4 w-4" />
+              风险扫描
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Select
+              value={props.symbol}
+              onValueChange={(value) => {
+                props.onSelect(value);
+              }}
+            >
+              <SelectTrigger><SelectValue placeholder="选择股票" /></SelectTrigger>
+              <SelectContent>
+                {props.watchlist.map((item) => (
+                  <SelectItem key={item.symbol} value={item.symbol}>{item.symbol} · {item.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={() => props.onRefresh(props.symbol)} disabled={props.loading}>
+                {props.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
+                扫描单股
+              </Button>
+              <Button variant="outline" onClick={props.onRefreshAll} disabled={props.loading}>
+                {props.loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
+                扫描股票池
+              </Button>
+            </div>
+            <p className="text-xs leading-5 text-zinc-500">
+              报警覆盖大幅回撤、政策事件、周期转弱、财报季和数据质量降级；扫描不依赖 LLM。
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader><CardTitle className="text-base">告警级别</CardTitle></CardHeader>
+          <CardContent className="grid grid-cols-2 gap-3">
+            {severityItems.map(([severity, label]) => (
+              <div key={severity} className="rounded-lg border bg-zinc-50 p-3">
+                <RiskSeverityBadge severity={severity} />
+                <p className="mt-3 text-2xl font-semibold">{props.summary.by_severity?.[severity] || 0}</p>
+                <p className="text-xs text-zinc-500">{label}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><CalendarClock className="h-4 w-4" />触发类型</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            {Object.entries(props.summary.by_category || {}).map(([category, count]) => (
+              <div key={category} className="flex items-center justify-between rounded-lg border bg-zinc-50 px-3 py-2 text-sm">
+                <span>{riskCategoryLabel(category)}</span>
+                <Badge variant="secondary" className="rounded-md">{count}</Badge>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="space-y-5">
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between text-base">
+              <span>实时风险队列</span>
+              <Badge variant="secondary" className="rounded-md">{props.summary.total} 条</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <RiskAlertList alerts={props.alerts} />
+          </CardContent>
+        </Card>
+
+        {props.report ? (
+          <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+            <CardHeader><CardTitle className="text-base">当前研报风险映射</CardTitle></CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-3">
+              <InfoList title="风险" items={props.report.risks || []} tone="warning" />
+              <InfoList title="策略失效" items={props.report.trading_strategy?.invalidation || []} tone="warning" />
+              <InfoList title="校验" items={props.report.pipeline_diagnostics?.validation_checks || []} />
+            </CardContent>
+          </Card>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -1026,6 +1311,100 @@ function SettingsTab({ health, providers }: { health: Health | null; providers: 
       </Card>
     </section>
   );
+}
+
+function RiskAlertList({ alerts, compact = false }: { alerts: RiskAlert[]; compact?: boolean }) {
+  if (!alerts.length) {
+    return (
+      <div className="flex min-h-32 items-center justify-center rounded-lg border border-dashed bg-zinc-50 text-sm text-zinc-500">
+        <FolderOpen className="mr-2 h-4 w-4" />
+        当前没有触发风险提醒
+      </div>
+    );
+  }
+  return (
+    <div className={compact ? "space-y-2" : "space-y-3"}>
+      {alerts.slice(0, compact ? 5 : 16).map((alert) => (
+        <div key={alert.id} className="rounded-lg border bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <RiskSeverityBadge severity={alert.severity} />
+                <Badge variant="secondary" className="rounded-md">{riskCategoryLabel(alert.category)}</Badge>
+                <span className="font-mono text-xs text-zinc-500">{alert.symbol}</span>
+              </div>
+              <p className="mt-2 text-sm font-semibold text-zinc-950">{alert.title}</p>
+            </div>
+            <span className="text-xs text-zinc-500">{new Date(alert.triggered_at).toLocaleString()}</span>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-zinc-700">{alert.message}</p>
+          {alert.evidence.length ? (
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {alert.evidence.slice(0, compact ? 2 : 4).map((item) => (
+                <div key={item} className="rounded-md bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-600">
+                  {item}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {alert.action_hint ? (
+            <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">{alert.action_hint}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RiskSeverityBadge({ severity }: { severity: string }) {
+  const style = {
+    critical: "bg-red-600 text-white",
+    warning: "bg-amber-600 text-white",
+    watch: "bg-zinc-900 text-white",
+    info: "bg-zinc-200 text-zinc-800 hover:bg-zinc-200",
+  }[severity] || "bg-zinc-200 text-zinc-800";
+  const label = {
+    critical: "严重",
+    warning: "警告",
+    watch: "观察",
+    info: "提示",
+  }[severity] || severity;
+  return <Badge className={`rounded-md ${style}`}>{label}</Badge>;
+}
+
+function riskCategoryLabel(category: string) {
+  return {
+    drawdown: "回撤",
+    policy_event: "政策",
+    cycle_shift: "周期",
+    earnings_season: "财报",
+    data_quality: "数据",
+    policy: "政策",
+    earnings: "财报",
+    macro: "宏观",
+    market: "市场",
+  }[category] || category;
+}
+
+function newsCategory(item: Record<string, unknown>) {
+  const text = `${String(item.title || "")} ${String(item.summary || "")}`.toLowerCase();
+  if (/政策|监管|关税|制裁|央行|证监会|policy|regulation|tariff|sanction|fed|sec/.test(text)) return "policy";
+  if (/财报|业绩|利润|营收|earnings|revenue|guidance/.test(text)) return "earnings";
+  if (/利率|通胀|财政|经济|宏观|gdp|inflation|rates/.test(text)) return "macro";
+  return "market";
+}
+
+function buildRiskSummary(alerts: RiskAlert[]): RiskSummary {
+  const bySeverity: Record<string, number> = { critical: 0, warning: 0, watch: 0, info: 0 };
+  const byCategory: Record<string, number> = {};
+  const symbols = new Set<string>();
+  for (const alert of alerts) {
+    bySeverity[alert.severity] = (bySeverity[alert.severity] || 0) + 1;
+    byCategory[alert.category] = (byCategory[alert.category] || 0) + 1;
+    symbols.add(alert.symbol);
+  }
+  const highest = ["critical", "warning", "watch", "info"].find((severity) => bySeverity[severity] > 0) || "info";
+  return { total: alerts.length, symbols: symbols.size, by_severity: bySeverity, by_category: byCategory, highest };
 }
 
 function MiniMetric({ label, value }: { label: string; value: string | number | null | undefined }) {

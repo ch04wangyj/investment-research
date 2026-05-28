@@ -1,7 +1,7 @@
 """Financial news headline fetcher.
 
-Uses Sina Finance roll API since AKShare news functions (news_cctv, stock_news_em,
-news_economic_baidu) are either too slow, broken, or return stale data.
+Uses AKShare stock_news_em for A-share stock-specific news, falling back to
+Sina Finance roll API for general financial/policy news.
 
 The Sina roll API returns current financial/policy news with ~200ms latency.
 """
@@ -9,7 +9,7 @@ The Sina roll API returns current financial/policy news with ~200ms latency.
 from datetime import datetime
 from typing import Any
 
-import streamlit as st
+from loguru import logger
 
 SINA_ROLL_URL = (
     "https://feed.mix.sina.com.cn/api/roll/get"
@@ -17,11 +17,17 @@ SINA_ROLL_URL = (
 )
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_financial_news(max_items: int = 8) -> list[dict[str, Any]]:
-    """Fetch recent financial/policy news headlines from Sina Finance.
+def fetch_financial_news(
+    symbol: str | None = None,
+    max_items: int = 8,
+) -> list[dict[str, Any]]:
+    """Fetch financial news headlines, optionally symbol-specific.
+
+    For A-share symbols, tries AKShare's stock_news_em first.
+    Falls back to Sina Finance general roll API.
 
     Args:
+        symbol: Optional stock ticker for symbol-specific news.
         max_items: Maximum number of news items to return (default 8).
 
     Returns:
@@ -31,6 +37,16 @@ def fetch_financial_news(max_items: int = 8) -> list[dict[str, Any]]:
     import json
     import urllib.request
 
+    # Try symbol-specific news via AKShare first
+    if symbol:
+        try:
+            news = _fetch_akshare_stock_news(symbol, max_items)
+            if news:
+                return news
+        except Exception:
+            logger.debug(f"AKShare news failed for {symbol}, falling back to Sina")
+
+    # Fall back to Sina general financial news
     try:
         url = SINA_ROLL_URL.format(max_items=max_items)
         req = urllib.request.Request(
@@ -70,3 +86,26 @@ def fetch_financial_news(max_items: int = 8) -> list[dict[str, Any]]:
 
     except Exception:
         return []
+
+
+def _fetch_akshare_stock_news(
+    symbol: str, max_items: int
+) -> list[dict[str, Any]]:
+    """Fetch stock-specific news via AKShare."""
+    import akshare as ak
+
+    df = ak.stock_news_em(symbol=symbol)
+    if df is None or df.empty:
+        return []
+
+    results = []
+    for _, row in df.head(max_items).iterrows():
+        title = str(row.get("标题", row.iloc[1] if len(row) > 1 else ""))
+        results.append({
+            "title": title,
+            "display_time": str(row.get("发布时间", "")),
+            "summary": str(row.get("摘要", row.get("内容", "")))[:200],
+            "url": str(row.get("新闻链接", row.get("链接", ""))),
+            "source": str(row.get("来源", "东方财富")),
+        })
+    return results

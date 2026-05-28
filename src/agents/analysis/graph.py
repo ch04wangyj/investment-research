@@ -12,8 +12,6 @@ Usage:
     result = run_agent_sync(agent, "Analyze AAPL")
 """
 
-from typing import Any
-
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
@@ -101,11 +99,42 @@ def create_analysis_agent(
     )
 
 
+def _extract_json_block(text: str) -> dict | None:
+    """Extract the first valid JSON object from text using brace-depth tracking.
+
+    Handles arbitrarily nested braces, unlike simple regex approaches.
+    """
+    import json
+
+    brace_depth = 0
+    start = None
+
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if brace_depth == 0:
+                start = i
+            brace_depth += 1
+        elif ch == "}":
+            brace_depth -= 1
+            if brace_depth == 0 and start is not None:
+                candidate = text[start : i + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+
+    return None
+
+
 def extract_report(state: AgentState) -> StructuredOutput | None:
     """Extract structured output from agent messages.
 
     Looks for the JSON block in the final AI message and parses it.
+    Handles nested JSON objects via brace-depth tracking.
     """
+    import json
+    import re
+
     messages = state.get("messages", [])
     if not messages:
         return None
@@ -122,40 +151,20 @@ def extract_report(state: AgentState) -> StructuredOutput | None:
 
     content = last_ai.content if hasattr(last_ai, "content") else str(last_ai)
 
-    # Try to extract JSON from content
-    import json
-    import re
-
-    # Find JSON block
+    # Prefer explicit ```json code blocks
     json_match = re.search(r"```json\s*(.*?)\s*```", content, re.DOTALL)
     if json_match:
         try:
             data = json.loads(json_match.group(1))
         except json.JSONDecodeError:
-            # Try finding any JSON-like structure
-            brace_match = re.search(r"\{[^{}]*\}", content)
-            if brace_match:
-                try:
-                    data = json.loads(brace_match.group(0))
-                except json.JSONDecodeError:
-                    data = {}
-            else:
-                data = {}
+            data = _extract_json_block(content) or {}
     else:
-        # Try finding bare JSON object
-        brace_match = re.search(r"\{[^{}]*\"ticker\"[^{}]*\}", content)
-        if brace_match:
-            try:
-                data = json.loads(brace_match.group(0))
-            except json.JSONDecodeError:
-                data = {}
-        else:
-            data = {}
+        data = _extract_json_block(content) or {}
 
     return StructuredOutput(
         agent_name="FinancialAnalyst",
         content_type="analysis_report",
-        summary=content[-500:],  # Last 500 chars as summary
+        summary=str(content)[-500:],
         data=data,
         confidence=str(data.get("confidence", "low")) if isinstance(data, dict) else "low",
         metadata={"ticker": data.get("ticker", "") if isinstance(data, dict) else ""},
