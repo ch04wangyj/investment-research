@@ -26,7 +26,7 @@ class ModelProvider:
     def available(self) -> bool:
         if self.kind == "ollama":
             return True
-        return bool(os.getenv(self.api_key_env or ""))
+        return bool(_configured_api_key(self.api_key_env))
 
     def model_for(self, tier: Tier) -> str:
         return self.deep_model if tier == "deep" else self.quick_model
@@ -132,7 +132,7 @@ def create_chat_model(
 ) -> ChatOpenAI:
     settings = get_settings()
     provider = get_provider(provider_id)
-    api_key = "ollama" if provider.kind == "ollama" else os.getenv(provider.api_key_env or "")
+    api_key = "ollama" if provider.kind == "ollama" else _configured_api_key(provider.api_key_env)
     if provider.kind != "ollama" and not api_key:
         raise ValueError(f"Missing API key env var: {provider.api_key_env}")
 
@@ -148,3 +148,13 @@ def create_chat_model(
         timeout=180,
         model_kwargs=model_kwargs,
     )
+
+
+def _configured_api_key(env_name: str | None) -> str:
+    if not env_name:
+        return ""
+    value = os.getenv(env_name)
+    if value:
+        return value
+    settings = get_settings()
+    return str(getattr(settings, env_name.lower(), "") or "")
