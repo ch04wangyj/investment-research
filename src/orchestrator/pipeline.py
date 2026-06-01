@@ -24,6 +24,8 @@ class StageStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    BLOCKED = "blocked"
+    SKIPPED = "skipped"
 
 
 class PipelineStage(str, Enum):
@@ -31,6 +33,7 @@ class PipelineStage(str, Enum):
     DEEP_RESEARCH = "deep_research"
     REPORT_GENERATION = "report_generation"
     AUDIT = "audit"
+    PUBLISH = "publish"  # .md → .html + .pdf conversion
 
 
 PIPELINE_STAGES = (
@@ -38,6 +41,7 @@ PIPELINE_STAGES = (
     PipelineStage.DEEP_RESEARCH,
     PipelineStage.REPORT_GENERATION,
     PipelineStage.AUDIT,
+    PipelineStage.PUBLISH,
 )
 
 
@@ -189,9 +193,11 @@ class PipelineOrchestrator:
         provider_id: str | None = None,
         use_llm: bool = False,
         language: str = "zh",
-        skip_completed: bool = False,
+        skip_completed: bool | None = None,
     ) -> ResearchExecution:
         """Run one complete audited research workflow."""
+        settings = get_settings()
+        skip_completed = settings.pipeline_skip_completed if skip_completed is None else skip_completed
         normalized = normalize_symbol(symbol)
         market = detect_market(normalized)
         previous = self.load_state(normalized)
@@ -221,8 +227,13 @@ class PipelineOrchestrator:
             active_stage = PipelineStage.REPORT_GENERATION
             self._start_stage(result, active_stage)
             report_path, report_markdown_path = self._write_report(report)
+            archive_files = self._write_archive_inputs(report)
             result.report_path = str(report_path)
-            self._complete_stage(result, active_stage, [str(report_path), str(report_markdown_path)])
+            self._complete_stage(
+                result,
+                active_stage,
+                [str(report_path), str(report_markdown_path), *archive_files],
+            )
 
             active_stage = PipelineStage.AUDIT
             self._start_stage(result, active_stage)
@@ -238,6 +249,25 @@ class PipelineOrchestrator:
             result.report_path = str(report_path)
             result.audit_path = str(audit_path)
             self._complete_stage(result, active_stage, [str(audit_path), str(audit_markdown_path)])
+
+            # ── PUBLISH: .md → .html + .pdf (Moutai CSS template via Edge headless) ──
+            active_stage = PipelineStage.PUBLISH
+            self._start_stage(result, active_stage)
+            if audit.status != "approved":
+                self._block_stage(
+                    result,
+                    active_stage,
+                    f"Publication gate is {audit.status}; resolve audit findings before final publication.",
+                )
+                self.save_state(result)
+                return ResearchExecution(report=report, audit=audit, workflow=result)
+            if not settings.pipeline_publish_enabled:
+                self._skip_stage(result, active_stage, "Publication is disabled by configuration.")
+                self.save_state(result)
+                return ResearchExecution(report=report, audit=audit, workflow=result)
+            publish_files = self._publish_formats(result.symbol)
+            self._complete_stage(result, active_stage, publish_files)
+
             self.save_state(result)
             return ResearchExecution(report=report, audit=audit, workflow=result)
         except Exception as exc:
@@ -250,11 +280,12 @@ class PipelineOrchestrator:
         symbols: list[str | dict[str, Any]],
         *,
         parallel: bool = True,
-        max_workers: int = 4,
+        max_workers: int | None = None,
         **kwargs: Any,
     ) -> list[ResearchExecution]:
         """Run audited research workflows for multiple symbols."""
         items = [self._normalize_batch_item(item) for item in symbols]
+        max_workers = max_workers or get_settings().pipeline_max_workers
         if not parallel or len(items) <= 1:
             return [self.run_single(**item, **kwargs) for item in items]
 
@@ -293,6 +324,72 @@ class PipelineOrchestrator:
         markdown_path.write_text(_audit_markdown(report, audit), encoding="utf-8")
         return path, markdown_path
 
+    def _write_archive_inputs(self, report: ResearchReport) -> list[str]:
+        """Write independent archive inputs before final publication rendering."""
+        files = [
+            self._write_section(report, "fundamentals", _fundamentals_markdown(report)),
+            self._write_section(report, "technical", _technical_markdown(report)),
+            self._write_section(report, "macro", _macro_markdown(report)),
+        ]
+        files.extend(self._write_kline_files(report))
+        readme = self.symbol_dir(report.symbol) / "README.md"
+        readme.write_text(_archive_readme(report), encoding="utf-8")
+        files.append(str(readme))
+        return files
+
+    def _write_section(self, report: ResearchReport, section: str, markdown: str) -> str:
+        directory = self.symbol_dir(report.symbol) / section
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{report.run_id}.md"
+        path.write_text(markdown, encoding="utf-8")
+        return str(path)
+
+    def _write_kline_files(self, report: ResearchReport) -> list[str]:
+        rows = report.archive_history
+        if not rows:
+            return []
+        import pandas as pd
+
+        frame = pd.DataFrame(rows)
+        if "date" not in frame.columns:
+            return []
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+        frame = frame.dropna(subset=["date"]).sort_values("date")
+        if frame.empty:
+            return []
+
+        start = frame["date"].iloc[0].strftime("%Y%m%d")
+        end = frame["date"].iloc[-1].strftime("%Y%m%d")
+        kline_dir = self.symbol_dir(report.symbol) / "kline"
+        daily_dir = kline_dir / "daily"
+        weekly_dir = kline_dir / "weekly"
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        weekly_dir.mkdir(parents=True, exist_ok=True)
+        daily_path = daily_dir / f"{report.symbol}_daily_{start}_{end}.csv"
+        weekly_path = weekly_dir / f"{report.symbol}_weekly_{start}_{end}.csv"
+        frame.to_csv(daily_path, index=False, encoding="utf-8-sig")
+
+        aggregations = {
+            key: reducer
+            for key, reducer in {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            }.items()
+            if key in frame.columns
+        }
+        weekly = (
+            frame.set_index("date")
+            .resample("W-FRI")
+            .agg(aggregations)
+            .dropna(how="all")
+            .reset_index()
+        )
+        weekly.to_csv(weekly_path, index=False, encoding="utf-8-sig")
+        return [str(daily_path), str(weekly_path)]
+
     def _start_stage(self, result: SymbolResult, stage: PipelineStage) -> None:
         current = result.stages[stage.value]
         current.status = StageStatus.RUNNING
@@ -320,6 +417,18 @@ class PipelineOrchestrator:
             current.completed_at = datetime.now().isoformat()
             current.error = error
 
+    def _block_stage(self, result: SymbolResult, stage: PipelineStage, error: str) -> None:
+        current = result.stages[stage.value]
+        current.status = StageStatus.BLOCKED
+        current.completed_at = datetime.now().isoformat()
+        current.error = error
+
+    def _skip_stage(self, result: SymbolResult, stage: PipelineStage, reason: str) -> None:
+        current = result.stages[stage.value]
+        current.status = StageStatus.SKIPPED
+        current.completed_at = datetime.now().isoformat()
+        current.error = reason
+
     @staticmethod
     def _normalize_batch_item(item: str | dict[str, Any]) -> dict[str, str]:
         if isinstance(item, str):
@@ -327,6 +436,58 @@ class PipelineOrchestrator:
         if not item.get("symbol"):
             raise ValueError("Each batch item requires a symbol")
         return {"symbol": str(item["symbol"]), "name": str(item.get("name", ""))}
+
+    def _publish_formats(self, symbol: str) -> list[str]:
+        """Convert all .md outputs to .html + .pdf using the Moutai-standard pipeline.
+
+        Calls scripts/md2pdf.py which:
+        1. Runs scripts/md2html.py on each .md → .html (Moutai #8B0000 CSS)
+        2. Prints each .html → .pdf via Edge headless (Windows native, no GTK)
+        """
+        import subprocess
+        import sys
+
+        sym_dir = self.symbol_dir(symbol)
+        script = Path(__file__).resolve().parent.parent.parent / "scripts" / "md2pdf.py"
+        if not script.exists():
+            raise FileNotFoundError(f"md2pdf.py not found at {script}")
+
+        result = subprocess.run(
+            [sys.executable, str(script), str(sym_dir)],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Publish failed: {result.stderr.strip()}")
+        return self._validate_published_archive(sym_dir)
+
+    @staticmethod
+    def _validate_published_archive(sym_dir: Path) -> list[str]:
+        errors = []
+        files = []
+        for section in ["fundamentals", "technical", "macro", "reports", "audit"]:
+            markdown_files = sorted((sym_dir / section).glob("*.md"))
+            if not markdown_files:
+                errors.append(f"{section}/ has no markdown artifact")
+                continue
+            for markdown in markdown_files:
+                for suffix in [".md", ".html", ".pdf"]:
+                    sibling = markdown.with_suffix(suffix)
+                    if not sibling.exists() or sibling.stat().st_size <= 0:
+                        errors.append(f"Missing or empty artifact: {sibling}")
+                    else:
+                        files.append(str(sibling))
+        for period in ["daily", "weekly"]:
+            csv_files = sorted((sym_dir / "kline" / period).glob("*.csv"))
+            if not csv_files:
+                errors.append(f"kline/{period}/ has no CSV artifact")
+            files.extend(str(path) for path in csv_files)
+        if not (sym_dir / "README.md").exists():
+            errors.append("README.md is missing")
+        else:
+            files.append(str(sym_dir / "README.md"))
+        if errors:
+            raise RuntimeError("Archive publication validation failed:\n" + "\n".join(errors))
+        return sorted(set(files))
 
 
 def _report_markdown(report: ResearchReport) -> str:
@@ -377,3 +538,82 @@ def _audit_markdown(report: ResearchReport, audit: PublicationAudit) -> str:
         )
     lines.extend(["", "## Scope", audit.disclaimer])
     return "\n".join(lines)
+
+
+def _analyst_view_markdown(title: str, report: ResearchReport, views: list[tuple[str, Any]]) -> str:
+    lines = [
+        f"# {report.company_name} ({report.symbol}) {title}",
+        "",
+        f"- Run ID: {report.run_id}",
+        f"- Generated at: {report.generated_at.isoformat()}",
+    ]
+    for label, view in views:
+        lines.extend(
+            [
+                "",
+                f"## {label}",
+                f"- Score: {view.score:.0f}/100",
+                f"- Data quality: {view.data_quality}",
+                "",
+                view.summary,
+                "",
+                "### Evidence",
+            ]
+        )
+        lines.extend([f"- {item}" for item in view.evidence] or ["- No structured evidence available."])
+    lines.extend(["", "## Disclaimer", report.disclaimer])
+    return "\n".join(lines)
+
+
+def _fundamentals_markdown(report: ResearchReport) -> str:
+    lines = [
+        _analyst_view_markdown(
+            "Fundamentals Snapshot",
+            report,
+            [("Valuation", report.valuation), ("Financial Quality", report.financial_quality)],
+        ),
+        "",
+        "## Key Metrics",
+    ]
+    lines.extend([f"- {key}: {value}" for key, value in sorted(report.key_metrics.items())])
+    return "\n".join(lines)
+
+
+def _technical_markdown(report: ResearchReport) -> str:
+    return _analyst_view_markdown(
+        "Price Context Snapshot",
+        report,
+        [("Technical Context", report.technical)],
+    )
+
+
+def _macro_markdown(report: ResearchReport) -> str:
+    return _analyst_view_markdown(
+        "Macro Briefing",
+        report,
+        [("Macro And Policy Context", report.macro_context), ("News Sentiment", report.sentiment)],
+    )
+
+
+def _archive_readme(report: ResearchReport) -> str:
+    return "\n".join(
+        [
+            f"# {report.company_name} ({report.symbol}) Research Archive",
+            "",
+            f"- Latest run: {report.run_id}",
+            f"- Generated at: {report.generated_at.isoformat()}",
+            f"- Rating: {report.rating}",
+            f"- Confidence: {report.confidence}",
+            "",
+            "## Archive Layout",
+            "- `kline/`: daily and weekly price context CSV files",
+            "- `fundamentals/`: valuation and financial-quality snapshots",
+            "- `technical/`: price-context snapshot",
+            "- `macro/`: macro, policy, and public-news context",
+            "- `reports/`: structured final report",
+            "- `audit/`: deterministic publication gate",
+            "",
+            "## Disclaimer",
+            report.disclaimer,
+        ]
+    )

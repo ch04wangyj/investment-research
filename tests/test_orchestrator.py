@@ -45,6 +45,17 @@ def _fake_pipeline(symbol, **kwargs):
         bull_case=["Demand remains resilient."],
         bear_case=["Valuation may compress."],
         sources=[DataSource(name="fake", stale=False)],
+        archive_history=[
+            {
+                "date": f"2026-01-{(index % 28) + 1:02d}",
+                "open": 90 + index,
+                "high": 92 + index,
+                "low": 89 + index,
+                "close": 91 + index,
+                "volume": 1000 + index,
+            }
+            for index in range(40)
+        ],
     )
 
 
@@ -59,6 +70,9 @@ def test_orchestrator_executes_audits_and_restores_state(tmp_path):
     assert restored is not None
     assert restored.is_complete
     assert restored.stages["audit"].status == StageStatus.COMPLETED
+    assert restored.stages["publish"].status == StageStatus.COMPLETED
+    assert (tmp_path / "AAPL" / "fundamentals" / "run-AAPL.pdf").exists()
+    assert list((tmp_path / "AAPL" / "kline" / "daily").glob("*.csv"))
 
     cached = orchestrator.run_single("AAPL", skip_completed=True)
     assert cached.report.run_id == execution.report.run_id
@@ -92,3 +106,15 @@ def test_orchestrator_marks_running_stages_failed(tmp_path):
     assert restored is not None
     assert restored.stages["data_collection"].status == StageStatus.FAILED
     assert restored.stages["deep_research"].status == StageStatus.FAILED
+
+
+def test_orchestrator_blocks_publish_when_audit_is_not_approved(tmp_path):
+    def incomplete_pipeline(symbol, **kwargs):
+        report = _fake_pipeline(symbol, **kwargs)
+        return report.model_copy(update={"research_evidence": ResearchEvidenceBook()})
+
+    orchestrator = PipelineOrchestrator(root=tmp_path, pipeline=incomplete_pipeline)
+    execution = orchestrator.run_single("AAPL")
+    assert execution.audit.status == "conditional"
+    assert execution.workflow.stages["publish"].status == StageStatus.BLOCKED
+    assert not list((tmp_path / "AAPL").rglob("*.pdf"))

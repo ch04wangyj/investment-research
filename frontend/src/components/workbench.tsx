@@ -57,6 +57,7 @@ import {
   type NewsSource,
   type Quote,
   type RatingSummary,
+  type ResearchIntelligence,
   type ResearchReport,
   type RiskAlert,
   type RiskSummary,
@@ -147,6 +148,7 @@ export function Workbench() {
   const [dailyReads, setDailyReads] = useState<DailyReads | null>(null);
   const [workflowBlueprint, setWorkflowBlueprint] = useState<WorkflowBlueprint | null>(null);
   const [fixedIncome, setFixedIncome] = useState<FixedIncomeOverview | null>(null);
+  const [researchIntelligence, setResearchIntelligence] = useState<ResearchIntelligence | null>(null);
   const [comparison, setComparison] = useState<SymbolComparison | null>(null);
   const [report, setReport] = useState<ResearchReport | null>(null);
   const [profile, setProfile] = useState<SymbolProfile | null>(null);
@@ -156,6 +158,7 @@ export function Workbench() {
   const [comparing, setComparing] = useState(false);
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [riskLoading, setRiskLoading] = useState(false);
+  const [intelligenceLoading, setIntelligenceLoading] = useState(false);
   const [deletingReportIds, setDeletingReportIds] = useState<number[]>([]);
   const [selectedReportIds, setSelectedReportIds] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -200,6 +203,9 @@ export function Workbench() {
     apiGet<FixedIncomeOverview>("/api/fixed-income/overview?limit=10")
       .then(setFixedIncome)
       .catch(() => undefined);
+    apiGet<ResearchIntelligence>("/api/intelligence/overview?limit=60")
+      .then(setResearchIntelligence)
+      .catch(() => undefined);
     apiGet<Overview>("/api/market/overview")
       .then((next) => setOverview((current) => ({ ...next, news: current.news.length ? current.news : next.news })))
       .catch((err) => {
@@ -221,6 +227,19 @@ export function Workbench() {
       setError(`风险提醒加载失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setRiskLoading(false);
+    }
+  }
+
+  async function refreshIntelligence() {
+    setIntelligenceLoading(true);
+    setError(null);
+    try {
+      const response = await apiPost<ResearchIntelligence>("/api/intelligence/refresh?limit=5", {});
+      setResearchIntelligence(response);
+    } catch (err) {
+      setError(`情报学习刷新失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIntelligenceLoading(false);
     }
   }
 
@@ -496,16 +515,19 @@ export function Workbench() {
         <GuideStrip lang={lang} />
 
         <Tabs defaultValue="research" className="space-y-5">
-          <TabsList className="mx-auto grid h-auto w-full grid-cols-2 rounded-lg p-1 md:grid-cols-4 lg:w-[1240px] lg:grid-cols-8">
-            <TabsTrigger value="research">{tx(lang, "研报工作台", "Research")}</TabsTrigger>
-            <TabsTrigger value="evidence">{tx(lang, "资料目录", "Evidence")}</TabsTrigger>
-            <TabsTrigger value="strategy">{tx(lang, "策略方法", "Methods")}</TabsTrigger>
-            <TabsTrigger value="fixed-income">{tx(lang, "固收理财", "Fixed Income")}</TabsTrigger>
-            <TabsTrigger value="compare">{tx(lang, "股票对比", "Compare")}</TabsTrigger>
-            <TabsTrigger value="universe">{tx(lang, "股票池", "Universe")}</TabsTrigger>
-            <TabsTrigger value="risk">{tx(lang, "风险提醒", "Risk")}</TabsTrigger>
-            <TabsTrigger value="reports">{tx(lang, "报告历史", "Reports")}</TabsTrigger>
-          </TabsList>
+          <div className="-mx-1 overflow-x-auto px-1 pb-1">
+            <TabsList className="mx-auto !flex !h-auto w-max min-w-full justify-start rounded-lg p-1 [&_[data-slot=tabs-trigger]]:min-w-[116px] lg:!grid lg:w-full lg:grid-cols-9 lg:[&_[data-slot=tabs-trigger]]:min-w-0">
+              <TabsTrigger value="research">{tx(lang, "研报工作台", "Research")}</TabsTrigger>
+              <TabsTrigger value="evidence">{tx(lang, "资料目录", "Evidence")}</TabsTrigger>
+              <TabsTrigger value="intelligence">{tx(lang, "情报学习", "Intelligence")}</TabsTrigger>
+              <TabsTrigger value="strategy">{tx(lang, "策略方法", "Methods")}</TabsTrigger>
+              <TabsTrigger value="fixed-income">{tx(lang, "固收理财", "Fixed Income")}</TabsTrigger>
+              <TabsTrigger value="compare">{tx(lang, "股票对比", "Compare")}</TabsTrigger>
+              <TabsTrigger value="universe">{tx(lang, "股票池", "Universe")}</TabsTrigger>
+              <TabsTrigger value="risk">{tx(lang, "风险提醒", "Risk")}</TabsTrigger>
+              <TabsTrigger value="reports">{tx(lang, "报告历史", "Reports")}</TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="research" className="space-y-5">
             <ResearchTab
@@ -531,6 +553,15 @@ export function Workbench() {
 
           <TabsContent value="evidence" className="space-y-5">
             <EvidenceLibraryTab report={report} overview={overview} dailyReads={dailyReads} lang={lang} />
+          </TabsContent>
+
+          <TabsContent value="intelligence" className="space-y-5">
+            <ResearchIntelligenceTab
+              overview={researchIntelligence}
+              lang={lang}
+              loading={intelligenceLoading}
+              onRefresh={() => void refreshIntelligence()}
+            />
           </TabsContent>
 
           <TabsContent value="strategy" className="space-y-5">
@@ -1002,6 +1033,261 @@ function EvidenceLibraryTab({
       </div>
 
       <DailyReadsPanel reads={dailyReads} lang={lang} />
+    </section>
+  );
+}
+
+function ResearchIntelligenceTab({
+  overview,
+  lang,
+  loading,
+  onRefresh,
+}: {
+  overview: ResearchIntelligence | null;
+  lang: Lang;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const [quality, setQuality] = useState("all");
+  const [expandedSkill, setExpandedSkill] = useState<string | null>("source-ranked-research");
+  const [expandedDocument, setExpandedDocument] = useState<string | null>(null);
+
+  if (!overview) {
+    return (
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardContent className="flex min-h-48 items-center justify-center text-sm text-zinc-500">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          {tx(lang, "正在加载研究知识库与 Agent skills…", "Loading research intelligence and agent skills…")}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const categories = Object.keys(overview.stats.categories || {}).sort();
+  const qualities = Object.keys(overview.stats.qualities || {}).sort();
+  const normalizedQuery = query.trim().toLowerCase();
+  const documents = overview.documents.filter((item) => {
+    const matchesCategory = category === "all" || item.category === category;
+    const matchesQuality = quality === "all" || item.quality === quality;
+    const text = `${item.title} ${item.summary} ${item.source} ${item.category} ${item.tags.join(" ")}`.toLowerCase();
+    return matchesCategory && matchesQuality && (!normalizedQuery || text.includes(normalizedQuery));
+  });
+  const latestRefresh = overview.stats.latest_refresh;
+  const rankedSources = (overview.stats.qualities?.primary || 0) + (overview.stats.qualities?.institutional || 0);
+
+  return (
+    <section className="space-y-5">
+      <Card className="overflow-hidden rounded-lg border-white/80 bg-white shadow-sm">
+        <CardContent className="grid gap-5 p-5 lg:grid-cols-[1.2fr_0.8fr] lg:p-6">
+          <div>
+            <Badge className="rounded-md bg-violet-700 text-white hover:bg-violet-700">
+              <Brain className="mr-1.5 h-3.5 w-3.5" />
+              {tx(lang, "Research Intelligence", "Research Intelligence")}
+            </Badge>
+            <h2 className="mt-3 text-xl font-semibold tracking-tight text-zinc-950">
+              {tx(lang, "持续读取先进观点，但不让 Agent 偷偷改写自己", "Keep reading advanced views without silent agent self-rewrites")}
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-600">{overview.positioning}</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
+                {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                {tx(lang, "刷新公开资料", "Refresh Sources")}
+              </Button>
+              <Badge variant="secondary" className="rounded-md">
+                {latestRefresh
+                  ? `${latestRefresh.status} · ${new Date(latestRefresh.completed_at).toLocaleString()}`
+                  : tx(lang, "尚未运行在线刷新", "No online refresh yet")}
+              </Badge>
+              <Badge variant="secondary" className="rounded-md">
+                {overview.auto_refresh.enabled
+                  ? tx(lang, `后台自动刷新 · ${overview.auto_refresh.interval_hours}h`, `Background refresh · ${overview.auto_refresh.interval_hours}h`)
+                  : tx(lang, "后台自动刷新未启用", "Background refresh disabled")}
+              </Badge>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <MiniMetric label={tx(lang, "目录条目", "Documents")} value={overview.stats.total_documents} />
+            <MiniMetric label={tx(lang, "版本化 Skills", "Versioned Skills")} value={overview.skills.length} />
+            <MiniMetric label={tx(lang, "高质量来源", "Ranked Sources")} value={rankedSources} />
+            <MiniMetric label={tx(lang, "知识分类", "Categories")} value={categories.length} />
+          </div>
+        </CardContent>
+      </Card>
+
+      <section className="grid items-start gap-5 lg:grid-cols-[0.92fr_1.08fr]">
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldCheck className="h-4 w-4" />
+              {tx(lang, "学习边界", "Learning Boundary")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {overview.learning_protocol.map((item) => (
+              <div key={item} className="flex gap-2 rounded-lg border bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-600">
+                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-700" />
+                <span>{item}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Database className="h-4 w-4" />
+              {tx(lang, "来源质量分层", "Source Quality Tiers")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2">
+            {qualities.map((item) => (
+              <div key={item} className="flex items-center justify-between rounded-lg border bg-zinc-50 px-3 py-3">
+                <div>
+                  <p className="text-sm font-medium text-zinc-900">{sourceQualityLabel(item, lang)}</p>
+                  <p className="mt-1 text-xs text-zinc-500">{intelligenceQualityHint(item, lang)}</p>
+                </div>
+                <Badge variant="secondary" className="rounded-md">{overview.stats.qualities[item]}</Badge>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </section>
+
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between gap-3 text-base">
+            <span className="flex items-center gap-2">
+              <Bot className="h-4 w-4" />
+              {tx(lang, "Agent Skill Packs", "Agent Skill Packs")}
+            </span>
+            <Badge variant="secondary" className="rounded-md">{overview.skills.length}</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2">
+          {overview.skills.map((skill) => {
+            const open = expandedSkill === skill.id;
+            return (
+              <div key={skill.id} className="rounded-lg border bg-zinc-50">
+                <button
+                  type="button"
+                  onClick={() => setExpandedSkill(open ? null : skill.id)}
+                  className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left"
+                >
+                  <span>
+                    <span className="block text-sm font-semibold text-zinc-950">{skill.title}</span>
+                    <span className="mt-1 block text-xs leading-5 text-zinc-600">{skill.description}</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <Badge variant="secondary" className="rounded-md">v{skill.version}</Badge>
+                    {open ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+                  </span>
+                </button>
+                {open ? (
+                  <div className="space-y-3 border-t bg-white px-4 py-3 text-xs leading-5 text-zinc-600">
+                    <div>
+                      <p className="font-medium text-zinc-900">{tx(lang, "适用 Agent", "Agent Roles")}</p>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {skill.agent_roles.map((role) => <Badge key={role} variant="secondary" className="rounded-md">{role}</Badge>)}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="font-medium text-zinc-900">{tx(lang, "复核约束", "Guardrails")}</p>
+                      <div className="mt-2 space-y-1">
+                        {skill.guardrails.map((item) => <p key={item}>· {item}</p>)}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex flex-wrap items-center justify-between gap-3 text-base">
+            <span className="flex items-center gap-2">
+              <BookOpen className="h-4 w-4" />
+              {tx(lang, "可检索资料目录", "Searchable Research Catalog")}
+            </span>
+            <Badge variant="secondary" className="rounded-md">{documents.length}/{overview.documents.length}</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid items-center gap-2 md:grid-cols-[1fr_180px_180px]">
+            <label className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={tx(lang, "搜索标题、摘要、来源、标签", "Search title, summary, source, tags")}
+                className="h-9 bg-white pl-9"
+              />
+            </label>
+            <Select value={category} onValueChange={setCategory}>
+              <SelectTrigger className="h-9 bg-white"><SelectValue placeholder={tx(lang, "全部分类", "All categories")} /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{tx(lang, "全部分类", "All categories")}</SelectItem>
+                {categories.map((item) => <SelectItem key={item} value={item}>{intelligenceCategoryLabel(item, lang)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={quality} onValueChange={setQuality}>
+              <SelectTrigger className="h-9 bg-white"><SelectValue placeholder={tx(lang, "全部质量层级", "All quality tiers")} /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{tx(lang, "全部质量层级", "All quality tiers")}</SelectItem>
+                {qualities.map((item) => <SelectItem key={item} value={item}>{sourceQualityLabel(item, lang)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {documents.map((item) => {
+              const open = expandedDocument === item.id;
+              return (
+                <div key={item.id} className="rounded-lg border bg-zinc-50">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedDocument(open ? null : item.id)}
+                    className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left"
+                  >
+                    <span>
+                      <span className="line-clamp-2 block text-sm font-medium leading-5 text-zinc-950">{item.title}</span>
+                      <span className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                        <Badge variant="secondary" className="rounded-md">{sourceQualityLabel(item.quality, lang)}</Badge>
+                        <span>{intelligenceCategoryLabel(item.category, lang)}</span>
+                        <span>{item.source}</span>
+                      </span>
+                    </span>
+                    {open ? <ChevronUp className="mt-1 h-4 w-4 shrink-0 text-zinc-500" /> : <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-zinc-500" />}
+                  </button>
+                  {open ? (
+                    <div className="border-t bg-white px-4 py-3 text-xs leading-5 text-zinc-600">
+                      <p>{item.summary}</p>
+                      <div className="mt-3 flex flex-wrap gap-1">
+                        {item.tags.map((tag) => <Badge key={tag} variant="secondary" className="rounded-md">{tag}</Badge>)}
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-zinc-500">
+                        <span>{item.as_of || item.collected_at}</span>
+                        {item.url ? (
+                          <a href={item.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 font-medium text-blue-600 hover:text-blue-700">
+                            {tx(lang, "打开原文", "Open source")} <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        ) : (
+                          <span>{tx(lang, "本地参考元数据", "Local reference metadata")}</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+            {!documents.length ? <DirectoryEmpty lang={lang} /> : null}
+          </div>
+        </CardContent>
+      </Card>
     </section>
   );
 }
@@ -2845,6 +3131,29 @@ function sourceQualityLabel(quality: string, lang: Lang = "zh") {
     search: tx(lang, "搜索线索", "Search"),
     unknown: tx(lang, "未知来源", "Unknown"),
   }[quality] || quality;
+}
+
+function intelligenceQualityHint(quality: string, lang: Lang) {
+  return {
+    primary: tx(lang, "公告、财报、监管和论文原文", "Filings, disclosures, and original papers"),
+    institutional: tx(lang, "公开机构框架与研报线索", "Public institutional frameworks and report leads"),
+    media: tx(lang, "用于补充事件背景", "Useful for event context"),
+    search: tx(lang, "只作为继续核验的入口", "Discovery only; requires verification"),
+    unknown: tx(lang, "进入报告前需要人工复核", "Manual review required before reporting"),
+  }[quality] || quality;
+}
+
+function intelligenceCategoryLabel(category: string, lang: Lang) {
+  return {
+    fixed_income: tx(lang, "固收框架", "Fixed Income"),
+    strategy: tx(lang, "策略研究", "Strategy"),
+    macro: tx(lang, "宏观与政策", "Macro & Policy"),
+    company: tx(lang, "公司研究", "Company"),
+    institutional: tx(lang, "机构观点", "Institutional"),
+    paper: tx(lang, "前沿论文", "Frontier Papers"),
+    daily_read: tx(lang, "每日阅读", "Daily Reads"),
+    strategy_research: tx(lang, "策略资料", "Strategy Research"),
+  }[category] || category;
 }
 
 function newsCategory(item: Record<string, unknown>) {

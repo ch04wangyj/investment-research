@@ -189,6 +189,7 @@ class ResearchReport(BaseModel):
         "This report is generated for personal research only and is not "
         "investment advice."
     )
+    archive_history: list[dict[str, Any]] = Field(default_factory=list, exclude=True)
 
 
 class ResearchRequest(BaseModel):

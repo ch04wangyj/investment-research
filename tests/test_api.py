@@ -127,6 +127,35 @@ def test_fixed_income_overview_endpoint(monkeypatch):
     assert response.json()["products"][0]["id"] == "money:1"
 
 
+def test_intelligence_overview_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        "src.api.main.intelligence_overview",
+        lambda limit=40: {
+            "generated_at": "2026-06-01T00:00:00",
+            "positioning": "auditable learning",
+            "stats": {"total_documents": 1},
+            "skills": [{"id": "source-ranked-research"}],
+            "documents": [],
+            "learning_protocol": [],
+        },
+    )
+    client = TestClient(app)
+    response = client.get("/api/intelligence/overview?limit=10")
+    assert response.status_code == 200
+    assert response.json()["skills"][0]["id"] == "source-ranked-research"
+
+
+def test_intelligence_refresh_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        "src.api.main.refresh_research_intelligence",
+        lambda max_items_per_section=5: {"stats": {"total_documents": 3}},
+    )
+    client = TestClient(app)
+    response = client.post("/api/intelligence/refresh?limit=3")
+    assert response.status_code == 200
+    assert response.json()["stats"]["total_documents"] == 3
+
+
 def test_daily_reads_endpoint(monkeypatch):
     monkeypatch.setattr(
         "src.api.main.collect_daily_reads",

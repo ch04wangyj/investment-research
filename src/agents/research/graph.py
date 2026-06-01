@@ -12,6 +12,7 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
+from config.settings import get_settings
 from src.analysis.technical import compute_technical_snapshot
 from src.core.llm import create_chat_model
 from src.data.dal import detect_market, get_dal, normalize_symbol
@@ -27,6 +28,7 @@ from src.research.schemas import (
     TradingStrategy,
 )
 from src.research.source_collector import collect_research_evidence
+from src.research.intelligence import retrieve_research_context
 from src.risk.alerts import evaluate_symbol_risk_from_payload, risk_penalty
 
 
@@ -67,8 +69,6 @@ def build_research_graph(parallel: bool = False):
 
     if parallel:
         workflow.add_node("ParallelDataCollector", parallel_data_collector)
-        workflow.add_node("CollectSingle", _collect_single)
-        workflow.add_node("AggregateData", aggregate_collected_data)
         # Sequential stages after aggregation
         workflow.add_node("ResearchSourceCollector", research_source_collector)
         workflow.add_node("InformationSummarizer", information_summarizer)
@@ -82,13 +82,7 @@ def build_research_graph(parallel: bool = False):
         workflow.add_node("ResearchDirector", research_director)
 
         workflow.set_entry_point("ParallelDataCollector")
-        workflow.add_conditional_edges(
-            "ParallelDataCollector",
-            _fan_out_send,
-            ["CollectSingle"],
-        )
-        workflow.add_edge("CollectSingle", "AggregateData")
-        workflow.add_edge("AggregateData", "ResearchSourceCollector")
+        workflow.add_edge("ParallelDataCollector", "ResearchSourceCollector")
     else:
         workflow.add_node("DataCollector", data_collector)
         workflow.add_node("ResearchSourceCollector", research_source_collector)
@@ -199,23 +193,63 @@ def _fetch_market_data_bundle(symbol: str, period: str) -> dict[str, Any]:
 
 # ── Fan-out parallel data collection (Phase 4) ──
 
-def parallel_data_collector(state: ResearchState) -> list:
-    """Fan-out entry: returns Send objects, one per symbol."""
-    from langgraph.types import Send
+def parallel_data_collector(state: ResearchState) -> dict[str, Any]:
+    """Collect multiple symbols concurrently and keep the first as report anchor.
 
+    Cross-symbol synthesis is intentionally delegated to the comparison engine.
+    This node only fans out provider I/O while preserving a valid LangGraph
+    state update for the single-report research pipeline.
+    """
     symbols = state.get("symbols", [state.get("symbol", "")])
-    if not symbols:
-        symbols = [state["symbol"]]
-    return [
-        Send("CollectSingle", {
-            "symbol": sym,
-            "market": state.get("market", ""),
-            "period": state.get("period", "6mo"),
-            "run_id": state.get("run_id", ""),
-            "errors": list(state.get("errors", [])),
-        })
-        for sym in symbols
+    normalized_symbols = [
+        normalize_symbol(symbol, detect_market(symbol))
+        for symbol in symbols
+        if symbol
     ]
+    if not normalized_symbols:
+        normalized_symbols = [state["symbol"]]
+
+    bundles: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=min(6, len(normalized_symbols))) as executor:
+        future_map = {
+            executor.submit(_fetch_market_data_bundle, symbol, state.get("period", "6mo")): symbol
+            for symbol in normalized_symbols
+        }
+        for future, symbol in future_map.items():
+            try:
+                bundles[symbol] = future.result()
+            except Exception as exc:
+                bundles[symbol] = {
+                    "quote": {},
+                    "fundamentals": {},
+                    "history": [],
+                    "sources": [],
+                    "errors": [str(exc)],
+                }
+
+    primary = normalized_symbols[0]
+    primary_bundle = bundles[primary]
+    all_errors = [
+        f"{symbol}/{error}"
+        for symbol, bundle in bundles.items()
+        for error in bundle.get("errors", [])
+    ]
+    all_sources = [
+        source
+        for bundle in bundles.values()
+        for source in bundle.get("sources", [])
+    ]
+    return {
+        "symbol": primary,
+        "symbols": normalized_symbols,
+        "market": detect_market(primary),
+        "quote": primary_bundle["quote"],
+        "fundamentals": primary_bundle["fundamentals"],
+        "history": primary_bundle["history"],
+        "sources": all_sources,
+        "errors": list(state.get("errors", [])) + all_errors,
+        "_collected": bundles,
+    }
 
 
 def _fan_out_send(state: ResearchState) -> list:
@@ -305,6 +339,19 @@ def research_source_collector(state: ResearchState) -> dict[str, Any]:
             company_name=company_name,
             sector=sector,
         )
+        intelligence_items = retrieve_research_context(
+            " ".join(item for item in [state["symbol"], company_name, sector] if item),
+            limit=get_settings().intelligence_context_items,
+        )
+        if intelligence_items:
+            evidence_book = evidence_book.model_copy(
+                update={
+                    "channel_analysis": [
+                        *intelligence_items,
+                        *evidence_book.channel_analysis,
+                    ][:10],
+                }
+            )
         errors = list(state.get("errors", [])) + [
             f"evidence: {item}" for item in evidence_book.errors
         ]
@@ -1081,6 +1128,7 @@ def research_director(state: ResearchState) -> dict[str, Any]:
             if state.get("language") != "en"
             else "This report is generated for personal research only and is not investment advice."
         ),
+        archive_history=state.get("history", []),
     )
     return {"report": report, "llm_status": llm_status}
 

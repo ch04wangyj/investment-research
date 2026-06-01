@@ -136,6 +136,23 @@ class Settings(BaseSettings):
     cache_ttl_fundamentals_l1: int = 86400  # 24h in-memory
     cache_ttl_fundamentals_l2: int = 604800  # 7d SQLite
 
+    # ── Pipeline ──
+    pipeline_max_workers: int = 4
+    pipeline_publish_enabled: bool = True   # Auto-convert .md → .html + .pdf after audit
+    pipeline_skip_completed: bool = False   # Skip symbols with completed runs
+
+    # ── Extension Modules (Phase 4 roadmap) ──
+    screener_enabled: bool = False            # Auto stock screener (cron)
+    screener_cron: str = "0 8 * * 1-5"       # Weekdays 8am
+    realtime_monitor_enabled: bool = False    # Real-time price/volume/alert monitor
+    realtime_poll_seconds: int = 300          # Poll interval (5 min default)
+    daily_briefing_enabled: bool = False      # Daily pre-market briefing
+    portfolio_tracker_enabled: bool = False   # Auto-update portfolio state
+    trading_signals_enabled: bool = False     # Generate trade signals from research
+    intelligence_auto_refresh_enabled: bool = False
+    intelligence_refresh_hours: int = 12
+    intelligence_context_items: int = 4
+
     def model_post_init(self, _ctx):
         # Ensure data directories exist
         for d in [self.data_dir, self.sqlite_dir, self.chroma_dir, self.parquet_dir, self.cache_dir, self.stock_research_root]:

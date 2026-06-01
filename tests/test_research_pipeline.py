@@ -94,3 +94,21 @@ def test_research_pipeline_returns_typed_report(monkeypatch):
     assert report.trading_strategy is None
     assert isinstance(report.risk_alerts, list)
     assert report.pipeline_diagnostics.topology == "guarded_dag"
+    assert report.archive_history
+
+
+def test_parallel_research_collection_keeps_primary_report_anchor(monkeypatch):
+    monkeypatch.setattr(research_graph, "get_dal", lambda: FakeDAL())
+    monkeypatch.setattr(
+        research_graph,
+        "collect_research_evidence",
+        lambda *args, **kwargs: ResearchEvidenceBook(),
+    )
+    monkeypatch.setattr(
+        research_graph,
+        "fetch_financial_news",
+        lambda symbol=None, max_items=5: [],
+    )
+    report = research_graph.run_research_pipeline("AAPL", symbols=["AAPL", "MSFT"])
+    assert report.symbol == "AAPL"
+    assert report.archive_history

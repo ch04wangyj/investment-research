@@ -422,6 +422,56 @@ export type FixedIncomeOverview = {
   disclaimer: string;
 };
 
+export type ResearchSkillPack = {
+  id: string;
+  version: string;
+  title: string;
+  description: string;
+  agent_roles: string[];
+  guardrails: string[];
+  status: string;
+};
+
+export type IntelligenceDocument = {
+  id: string;
+  kind: string;
+  category: string;
+  title: string;
+  summary: string;
+  url: string;
+  source: string;
+  quality: string;
+  tags: string[];
+  as_of: string;
+  collected_at: string;
+  content_hash: string;
+  relevance: number;
+};
+
+export type ResearchIntelligence = {
+  generated_at: string;
+  positioning: string;
+  stats: {
+    total_documents: number;
+    categories: Record<string, number>;
+    qualities: Record<string, number>;
+    latest_refresh?: {
+      completed_at: string;
+      status: string;
+      document_count: number;
+      error?: string | null;
+    } | null;
+  };
+  skills: ResearchSkillPack[];
+  documents: IntelligenceDocument[];
+  auto_refresh: {
+    enabled: boolean;
+    scheduled: boolean;
+    interval_hours: number;
+  };
+  learning_protocol: string[];
+};
+
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!response.ok) {

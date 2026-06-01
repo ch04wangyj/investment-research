@@ -21,6 +21,11 @@ from src.orchestrator.roles import research_agent_catalog
 from src.research.schemas import ResearchRequest
 from src.research.daily_reads import collect_daily_reads
 from src.research.fixed_income import build_fixed_income_dashboard, fixed_income_framework
+from src.research.intelligence import (
+    intelligence_overview,
+    refresh_research_intelligence,
+    search_research_intelligence,
+)
 from src.research.strategy_research import collect_strategy_research
 from src.research.workflow_blueprint import workflow_blueprint
 from src.research.pdf_export import render_research_pdf
@@ -161,6 +166,31 @@ def fixed_income_research_framework() -> dict[str, Any]:
 @app.get("/api/fixed-income/overview")
 def fixed_income_overview(limit: int = 8) -> dict[str, Any]:
     return build_fixed_income_dashboard(max_products_per_category=max(1, min(limit, 20)))
+
+
+@app.get("/api/intelligence/overview")
+def research_intelligence_overview(limit: int = 40) -> dict[str, Any]:
+    return intelligence_overview(limit=max(1, min(limit, 100)))
+
+
+@app.get("/api/intelligence/search")
+def research_intelligence_search(
+    q: str = "",
+    category: str = "all",
+    quality: str = "all",
+    limit: int = 40,
+) -> dict[str, Any]:
+    return search_research_intelligence(
+        query=q,
+        category=category,
+        quality=quality,
+        limit=max(1, min(limit, 100)),
+    )
+
+
+@app.post("/api/intelligence/refresh")
+def research_intelligence_refresh(limit: int = 5) -> dict[str, Any]:
+    return refresh_research_intelligence(max_items_per_section=max(1, min(limit, 10)))
 
 
 @app.get("/api/workflow/blueprint")
