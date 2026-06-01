@@ -8,6 +8,13 @@ export type ApiMeta = {
   error?: string | null;
 };
 
+export type NewsSource = {
+  id: string;
+  name: string;
+  region: "cn" | "global" | string;
+  kind: "company" | "macro" | "search" | string;
+};
+
 export type Quote = {
   symbol?: string;
   name?: string;

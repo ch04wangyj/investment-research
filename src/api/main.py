@@ -15,7 +15,7 @@ from src.agents.research.graph import run_research_pipeline
 from src.core.llm import provider_catalog
 from src.data.dal import detect_market, get_dal, normalize_symbol
 from src.data.indices import fetch_all_indices
-from src.data.news_fetcher import fetch_financial_news
+from src.data.news_fetcher import fetch_financial_news, news_source_catalog
 from src.orchestrator.pipeline import PipelineOrchestrator
 from src.orchestrator.roles import research_agent_catalog
 from src.research.schemas import ResearchRequest
@@ -130,6 +130,7 @@ def market_overview() -> dict[str, Any]:
     return {
         "indices": indices,
         "news": news,
+        "news_sources": news_source_catalog(),
         "watchlist": [serialize_symbol(item) for item in symbols],
         "quotes": quotes,
         "sectors": build_sector_summary(symbols, quotes),
@@ -142,6 +143,7 @@ def news(symbol: str | None = None, limit: int = 30) -> dict[str, Any]:
     return {
         "items": fetch_financial_news(symbol=symbol, max_items=max(1, min(limit, 80))),
         "symbol": symbol,
+        "sources": news_source_catalog(),
     }
 
 

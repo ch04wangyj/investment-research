@@ -116,6 +116,18 @@ def test_daily_reads_endpoint(monkeypatch):
     assert response.json()["reading_protocol"] == ["macro first"]
 
 
+def test_news_endpoint_exposes_source_catalog(monkeypatch):
+    monkeypatch.setattr(
+        "src.api.main.fetch_financial_news",
+        lambda symbol=None, max_items=30: [{"title": "政策更新", "source": "东方财富财经"}],
+    )
+    client = TestClient(app)
+    response = client.get("/api/news?limit=2")
+    assert response.status_code == 200
+    assert response.json()["items"][0]["title"] == "政策更新"
+    assert any(item["region"] == "cn" for item in response.json()["sources"])
+
+
 def test_workflow_blueprint_endpoint():
     client = TestClient(app)
     response = client.get("/api/workflow/blueprint")

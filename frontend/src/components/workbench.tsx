@@ -51,6 +51,7 @@ import {
   type DailyReads,
   type Provider,
   type EvidenceItem,
+  type NewsSource,
   type Quote,
   type RatingSummary,
   type ResearchReport,
@@ -77,6 +78,7 @@ type Health = {
 type Overview = {
   indices: Array<Record<string, unknown>>;
   news: Array<Record<string, unknown>>;
+  news_sources?: NewsSource[];
   watchlist: SymbolItem[];
   quotes: Quote[];
   sectors?: SectorSummary[];
@@ -93,6 +95,7 @@ type RiskResponse = {
 type NewsResponse = {
   symbol?: string | null;
   items: Array<Record<string, unknown>>;
+  sources: NewsSource[];
 };
 
 type RunSummary = {
@@ -179,7 +182,7 @@ export function Workbench() {
     setLoading(false);
 
     apiGet<NewsResponse>("/api/news?limit=40")
-      .then((response) => setOverview((current) => ({ ...current, news: response.items })))
+      .then((response) => setOverview((current) => ({ ...current, news: response.items, news_sources: response.sources })))
       .catch(() => undefined);
     apiGet<StrategyResearch>("/api/strategy/research?limit=6")
       .then(setStrategyResearch)
@@ -715,10 +718,117 @@ function MetricCard({
   );
 }
 
-function NewsDirectory({ items, lang }: { items: Array<Record<string, unknown>>; lang: Lang }) {
+type DirectoryItem = {
+  title?: unknown;
+  summary?: unknown;
+  source?: unknown;
+  quality?: unknown;
+  tags?: unknown;
+  method_tags?: unknown;
+  why_read?: unknown;
+};
+
+type DirectorySourceOption = {
+  value: string;
+  label: string;
+};
+
+function DirectoryToolbar({
+  query,
+  setQuery,
+  source,
+  setSource,
+  sources,
+  resultCount,
+  totalCount,
+  lang,
+  compact = false,
+}: {
+  query: string;
+  setQuery: (value: string) => void;
+  source: string;
+  setSource: (value: string) => void;
+  sources: DirectorySourceOption[];
+  resultCount: number;
+  totalCount: number;
+  lang: Lang;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`grid items-center gap-2 ${compact ? "md:grid-cols-[1fr_152px_auto]" : "md:grid-cols-[1fr_190px_auto]"}`}>
+      <label className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={tx(lang, "搜索标题、摘要、标签", "Search titles, summaries, tags")}
+          className="h-9 bg-white pl-9"
+        />
+      </label>
+      <Select value={source} onValueChange={setSource}>
+        <SelectTrigger className="h-9 bg-white">
+          <SelectValue placeholder={tx(lang, "全部来源", "All sources")} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{tx(lang, "全部来源", "All sources")}</SelectItem>
+          {sources.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Badge variant="secondary" className="w-fit rounded-md">
+        {resultCount}/{totalCount}
+      </Badge>
+    </div>
+  );
+}
+
+function DirectoryEmpty({ lang }: { lang: Lang }) {
+  return (
+    <div className="rounded-md border border-dashed bg-white px-3 py-4 text-xs leading-5 text-zinc-500">
+      {tx(lang, "当前筛选条件没有匹配资料。换个关键词，研究员的书架还在。", "No material matches these filters. Try another term; the research shelf is still here.")}
+    </div>
+  );
+}
+
+function directoryItemMatches(item: DirectoryItem, query: string, source: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  const itemSource = String(item.source || "");
+  const text = [
+    item.title,
+    item.summary,
+    item.source,
+    item.quality,
+    item.tags,
+    item.method_tags,
+    item.why_read,
+  ].map((value) => String(value || "")).join(" ").toLowerCase();
+  return (source === "all" || itemSource === source) && (!normalizedQuery || text.includes(normalizedQuery));
+}
+
+function directorySourceOptions(items: DirectoryItem[]): DirectorySourceOption[] {
+  return Array.from(new Set(items.map((item) => String(item.source || "")).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b))
+    .map((value) => ({ value, label: value }));
+}
+
+function NewsDirectory({
+  items,
+  sources,
+  lang,
+}: {
+  items: Array<Record<string, unknown>>;
+  sources: NewsSource[];
+  lang: Lang;
+}) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
-  const filtered = items.filter((item) => filter === "all" || newsCategory(item) === filter);
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [showSources, setShowSources] = useState(false);
+  const filtered = items.filter((item) => {
+    const matchesCategory = filter === "all" || newsCategory(item) === filter;
+    const matchesSource = sourceFilter === "all" || String(item.source_channel || "") === sourceFilter;
+    return matchesCategory && matchesSource && directoryItemMatches(item, query, "all");
+  });
   const filters = [
     ["all", tx(lang, "全部", "All")],
     ["policy", tx(lang, "政策", "Policy")],
@@ -737,6 +847,16 @@ function NewsDirectory({ items, lang }: { items: Array<Record<string, unknown>>;
 
   return (
     <div className="space-y-3">
+      <DirectoryToolbar
+        query={query}
+        setQuery={setQuery}
+        source={sourceFilter}
+        setSource={setSourceFilter}
+        sources={sources.map((source) => ({ value: source.id, label: source.name }))}
+        resultCount={filtered.length}
+        totalCount={items.length}
+        lang={lang}
+      />
       <div className="flex flex-wrap gap-2">
         {filters.map(([value, label]) => (
           <Button
@@ -749,8 +869,27 @@ function NewsDirectory({ items, lang }: { items: Array<Record<string, unknown>>;
           </Button>
         ))}
       </div>
+      <div className="rounded-lg border bg-sky-50/60">
+        <button
+          type="button"
+          onClick={() => setShowSources((current) => !current)}
+          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs font-medium text-sky-900"
+        >
+          <span>{tx(lang, `已接入 ${sources.filter((source) => source.region === "cn").length} 个中国新闻源`, `${sources.filter((source) => source.region === "cn").length} China news sources connected`)}</span>
+          {showSources ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+        {showSources ? (
+          <div className="flex flex-wrap gap-2 border-t border-sky-100 px-3 py-3">
+            {sources.map((source) => (
+              <Badge key={source.id} variant="secondary" className="rounded-md bg-white text-sky-800">
+                {source.name} · {source.region === "cn" ? tx(lang, "中国", "China") : tx(lang, "全球", "Global")}
+              </Badge>
+            ))}
+          </div>
+        ) : null}
+      </div>
       <div className="space-y-2">
-        {filtered.slice(0, 14).map((item, index) => {
+        {filtered.slice(0, 24).map((item, index) => {
           const id = `${String(item.title || "news")}-${index}`;
           const open = expanded === id;
           return (
@@ -788,6 +927,7 @@ function NewsDirectory({ items, lang }: { items: Array<Record<string, unknown>>;
             </div>
           );
         })}
+        {!filtered.length ? <DirectoryEmpty lang={lang} /> : null}
       </div>
     </div>
   );
@@ -844,7 +984,7 @@ function EvidenceLibraryTab({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <NewsDirectory items={overview.news} lang={lang} />
+            <NewsDirectory items={overview.news} sources={overview.news_sources || []} lang={lang} />
           </CardContent>
         </Card>
       </div>
@@ -855,6 +995,11 @@ function EvidenceLibraryTab({
 }
 
 function DailyReadsPanel({ reads, lang }: { reads: DailyReads | null; lang: Lang }) {
+  const [query, setQuery] = useState("");
+  const [source, setSource] = useState("all");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const allItems = (reads?.sections || []).flatMap((section) => section.items);
   return (
     <Card className="rounded-lg border-white/80 bg-white shadow-sm">
       <CardHeader>
@@ -869,6 +1014,16 @@ function DailyReadsPanel({ reads, lang }: { reads: DailyReads | null; lang: Lang
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-5">
+        <DirectoryToolbar
+          query={query}
+          setQuery={setQuery}
+          source={source}
+          setSource={setSource}
+          sources={directorySourceOptions(allItems)}
+          resultCount={allItems.filter((item) => directoryItemMatches(item, query, source)).length}
+          totalCount={allItems.length}
+          lang={lang}
+        />
         <div className="grid gap-2 md:grid-cols-4">
           {(reads?.reading_protocol || [
             tx(lang, "先读宏观策略，再读行业/公司，最后回到公告原文。", "Read macro first, then sector/company, then primary filings."),
@@ -880,44 +1035,70 @@ function DailyReadsPanel({ reads, lang }: { reads: DailyReads | null; lang: Lang
         </div>
 
         <div className="grid gap-4 lg:grid-cols-3">
-          {(reads?.sections || []).map((section) => (
+          {(reads?.sections || []).map((section) => {
+            const sectionItems = section.items.filter((item) => directoryItemMatches(item, query, source));
+            const sectionOpen = !collapsed[section.id];
+            return (
             <div key={section.id} className="rounded-lg border bg-zinc-50 p-3">
-              <div className="flex items-start justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setCollapsed((current) => ({ ...current, [section.id]: !current[section.id] }))}
+                className="flex w-full items-start justify-between gap-3 text-left"
+              >
                 <div>
                   <p className="text-sm font-semibold text-zinc-950">{dailySectionTitle(section.id, section.title, lang)}</p>
                   <p className="mt-1 text-xs leading-5 text-zinc-500">{dailySectionDescription(section.id, section.description, lang)}</p>
                 </div>
-                <Badge variant="secondary" className="rounded-md">{section.items.length}</Badge>
-              </div>
-              <div className="mt-3 space-y-2">
-                {section.items.map((item) => (
-                  <a
-                    key={`${section.id}-${item.url}-${item.title}`}
-                    href={item.url || "#"}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="group block rounded-md border bg-white px-3 py-2 transition hover:border-zinc-400"
-                  >
+                <span className="flex items-center gap-2">
+                  <Badge variant="secondary" className="rounded-md">{sectionItems.length}/{section.items.length}</Badge>
+                  {sectionOpen ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+                </span>
+              </button>
+              {sectionOpen ? <div className="mt-3 space-y-2">
+                {sectionItems.map((item) => {
+                  const itemId = `${section.id}-${item.url}-${item.title}`;
+                  const itemOpen = expanded === itemId;
+                  return (
+                  <div key={itemId} className="rounded-md border bg-white">
+                    <button
+                      type="button"
+                      onClick={() => setExpanded(itemOpen ? null : itemId)}
+                      className="group block w-full px-3 py-2 text-left transition hover:bg-white"
+                    >
                     <div className="flex items-start justify-between gap-2">
                       <span className="line-clamp-2 text-sm font-medium leading-5 text-zinc-900">{item.title || "Untitled"}</span>
-                      <ExternalLink className="mt-1 h-3.5 w-3.5 shrink-0 text-zinc-400 group-hover:text-zinc-800" />
+                      {itemOpen ? <ChevronUp className="mt-1 h-3.5 w-3.5 shrink-0 text-zinc-500" /> : <ChevronDown className="mt-1 h-3.5 w-3.5 shrink-0 text-zinc-500" />}
                     </div>
-                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-zinc-600">{item.summary || item.why_read}</p>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <Badge variant="secondary" className="rounded-md">{sourceQualityLabel(item.quality, lang)}</Badge>
                       <span className="text-xs text-zinc-500">{item.source || "-"}</span>
                       <span className="text-xs text-zinc-400">{item.reading_time_min} min</span>
                     </div>
-                  </a>
-                ))}
-                {!section.items.length ? (
+                    </button>
+                    {itemOpen ? (
+                      <div className="border-t px-3 py-3 text-xs leading-5 text-zinc-600">
+                        <p>{item.summary || item.why_read}</p>
+                        <p className="mt-2 text-zinc-500">{item.why_read}</p>
+                        <div className="mt-3 flex items-center justify-between gap-3">
+                          <div className="flex flex-wrap gap-1">
+                            {item.tags.map((tag) => <Badge key={tag} variant="secondary" className="rounded-md">{tag}</Badge>)}
+                          </div>
+                          <a href={item.url || "#"} target="_blank" rel="noreferrer" className="flex shrink-0 items-center gap-1 font-medium text-blue-600 hover:text-blue-700">
+                            {tx(lang, "打开原文", "Open source")} <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                )})}
+                {!sectionItems.length ? (
                   <div className="rounded-md border border-dashed bg-white px-3 py-4 text-xs text-zinc-500">
-                    {tx(lang, "暂无阅读材料，搜索源可能暂不可用。", "No reading material yet; search sources may be unavailable.")}
+                    {tx(lang, "当前筛选条件下暂无阅读材料。", "No reading material matches the current filters.")}
                   </div>
                 ) : null}
-              </div>
+              </div> : null}
             </div>
-          ))}
+          )})}
           {!reads?.sections?.length ? (
             <div className="rounded-lg border border-dashed bg-zinc-50 p-6 text-sm text-zinc-500 lg:col-span-3">
               {tx(lang, "每日阅读清单正在加载。", "Daily reading list is loading.")}
@@ -930,34 +1111,52 @@ function DailyReadsPanel({ reads, lang }: { reads: DailyReads | null; lang: Lang
 }
 
 function EvidenceGroup({ title, items, lang }: { title: string; items: EvidenceItem[]; lang: Lang }) {
+  const [open, setOpen] = useState(true);
+  const [query, setQuery] = useState("");
+  const [source, setSource] = useState("all");
+  const filtered = items.filter((item) => directoryItemMatches(item, query, source));
   return (
     <div className="rounded-lg border bg-zinc-50 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">{title}</p>
-        <Badge variant="secondary" className="rounded-md">{items.length}</Badge>
-      </div>
-      <div className="mt-3 space-y-2">
-        {(items.length ? items : []).slice(0, 6).map((item) => (
-          <a
-            key={`${item.channel}-${item.url}-${item.title}`}
-            href={item.url || "#"}
-            target="_blank"
-            rel="noreferrer"
-            className="block rounded-md border bg-white px-3 py-2 text-sm leading-5 text-zinc-800 hover:border-zinc-400"
-          >
-            <span className="line-clamp-2 font-medium">{item.title || "Untitled source"}</span>
-            <span className="mt-1 block text-xs text-zinc-500">
-              {sourceQualityLabel(item.quality, lang)} · {item.source || "source"} · score {Math.round(item.score)}
-            </span>
-            {item.summary ? <span className="mt-2 line-clamp-2 block text-xs leading-5 text-zinc-600">{item.summary}</span> : null}
-          </a>
-        ))}
-        {!items.length ? (
-          <p className="rounded-md bg-white px-3 py-2 text-xs leading-5 text-zinc-500">
-            {tx(lang, "暂无可用来源。研究员已把自信心音量调小。", "No available source. Confidence volume has been turned down.")}
-          </p>
-        ) : null}
-      </div>
+      <button type="button" onClick={() => setOpen((current) => !current)} className="flex w-full items-center justify-between gap-3 text-left">
+        <span className="text-xs font-medium uppercase tracking-[0.12em] text-zinc-500">{title}</span>
+        <span className="flex items-center gap-2">
+          <Badge variant="secondary" className="rounded-md">{items.length}</Badge>
+          {open ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+        </span>
+      </button>
+      {open ? (
+        <div className="mt-3 space-y-3">
+          <DirectoryToolbar
+            query={query}
+            setQuery={setQuery}
+            source={source}
+            setSource={setSource}
+            sources={directorySourceOptions(items)}
+            resultCount={filtered.length}
+            totalCount={items.length}
+            lang={lang}
+            compact
+          />
+          <div className="space-y-2">
+            {filtered.slice(0, 10).map((item) => (
+              <a
+                key={`${item.channel}-${item.url}-${item.title}`}
+                href={item.url || "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="block rounded-md border bg-white px-3 py-2 text-sm leading-5 text-zinc-800 transition hover:border-zinc-400"
+              >
+                <span className="line-clamp-2 font-medium">{item.title || "Untitled source"}</span>
+                <span className="mt-1 block text-xs text-zinc-500">
+                  {sourceQualityLabel(item.quality, lang)} · {item.source || "source"} · score {Math.round(item.score)}
+                </span>
+                {item.summary ? <span className="mt-2 line-clamp-2 block text-xs leading-5 text-zinc-600">{item.summary}</span> : null}
+              </a>
+            ))}
+            {!filtered.length ? <DirectoryEmpty lang={lang} /> : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1013,43 +1212,7 @@ function StrategyResearchTab({
       <div className="grid gap-5">
         <WorkflowBlueprintPanel blueprint={blueprint} lang={lang} />
         {(research?.sections || []).map((section) => (
-          <Card key={section.id} className="rounded-lg border-white/80 bg-white shadow-sm">
-            <CardHeader>
-              <CardTitle className="flex flex-wrap items-center justify-between gap-2 text-base">
-                <span>{strategySectionTitle(section.id, section.title, lang)}</span>
-                <Badge variant="secondary" className="rounded-md">{section.items.length}</Badge>
-              </CardTitle>
-              <p className="text-sm leading-6 text-zinc-500">{strategySectionDescription(section.id, section.description, lang)}</p>
-            </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-2">
-              {section.items.length ? section.items.map((item) => (
-                <a
-                  key={`${section.id}-${item.url}-${item.title}`}
-                  href={item.url || "#"}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="group flex min-h-36 flex-col rounded-lg border bg-zinc-50 p-4 transition hover:border-zinc-400 hover:bg-white"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-950">{item.title || "Untitled"}</p>
-                    <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-400 group-hover:text-zinc-800" />
-                  </div>
-                  <p className="mt-2 line-clamp-3 text-xs leading-5 text-zinc-600">{item.summary || tx(lang, "暂无摘要", "No summary")}</p>
-                  <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">
-                    <Badge variant="secondary" className="rounded-md">{sourceQualityLabel(item.quality, lang)}</Badge>
-                    <span className="text-xs text-zinc-500">{item.source}</span>
-                    {item.method_tags.slice(0, 2).map((tag) => (
-                      <span key={tag} className="rounded-md bg-white px-2 py-1 text-[11px] text-zinc-500">{tag}</span>
-                    ))}
-                  </div>
-                </a>
-              )) : (
-                <div className="rounded-lg border border-dashed bg-zinc-50 p-6 text-sm text-zinc-500">
-                  {tx(lang, "暂未检索到策略资料。", "No strategy material collected yet.")}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <StrategyDirectorySection key={section.id} section={section} lang={lang} />
         ))}
         {!research?.sections?.length ? (
           <Card className="rounded-lg border-white/80 bg-white shadow-sm">
@@ -1060,6 +1223,77 @@ function StrategyResearchTab({
         ) : null}
       </div>
     </section>
+  );
+}
+
+function StrategyDirectorySection({
+  section,
+  lang,
+}: {
+  section: StrategyResearch["sections"][number];
+  lang: Lang;
+}) {
+  const [open, setOpen] = useState(true);
+  const [query, setQuery] = useState("");
+  const [source, setSource] = useState("all");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const filtered = section.items.filter((item) => directoryItemMatches(item, query, source));
+  return (
+    <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+      <CardHeader>
+        <button type="button" onClick={() => setOpen((current) => !current)} className="flex w-full flex-wrap items-start justify-between gap-3 text-left">
+          <span>
+            <span className="block text-base font-semibold">{strategySectionTitle(section.id, section.title, lang)}</span>
+            <span className="mt-1 block text-sm font-normal leading-6 text-zinc-500">{strategySectionDescription(section.id, section.description, lang)}</span>
+          </span>
+          <span className="flex items-center gap-2">
+            <Badge variant="secondary" className="rounded-md">{filtered.length}/{section.items.length}</Badge>
+            {open ? <ChevronUp className="h-4 w-4 text-zinc-500" /> : <ChevronDown className="h-4 w-4 text-zinc-500" />}
+          </span>
+        </button>
+      </CardHeader>
+      {open ? (
+        <CardContent className="space-y-3">
+          <DirectoryToolbar
+            query={query}
+            setQuery={setQuery}
+            source={source}
+            setSource={setSource}
+            sources={directorySourceOptions(section.items)}
+            resultCount={filtered.length}
+            totalCount={section.items.length}
+            lang={lang}
+          />
+          <div className="grid gap-3 md:grid-cols-2">
+            {filtered.length ? filtered.map((item) => {
+              const itemId = `${section.id}-${item.url}-${item.title}`;
+              const itemOpen = expanded === itemId;
+              return (
+                <div key={itemId} className="rounded-lg border bg-zinc-50 transition hover:border-zinc-400 hover:bg-white">
+                  <button type="button" onClick={() => setExpanded(itemOpen ? null : itemId)} className="flex w-full items-start justify-between gap-3 p-4 text-left">
+                    <span className="line-clamp-2 text-sm font-semibold leading-5 text-zinc-950">{item.title || "Untitled"}</span>
+                    {itemOpen ? <ChevronUp className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-500" /> : <ChevronDown className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-500" />}
+                  </button>
+                  {itemOpen ? (
+                    <div className="border-t px-4 py-3">
+                      <p className="text-xs leading-5 text-zinc-600">{item.summary || tx(lang, "暂无摘要", "No summary")}</p>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary" className="rounded-md">{sourceQualityLabel(item.quality, lang)}</Badge>
+                        <span className="text-xs text-zinc-500">{item.source}</span>
+                        {item.method_tags.map((tag) => <Badge key={tag} variant="secondary" className="rounded-md">{tag}</Badge>)}
+                        <a href={item.url || "#"} target="_blank" rel="noreferrer" className="ml-auto flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700">
+                          {tx(lang, "打开原文", "Open source")} <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            }) : <DirectoryEmpty lang={lang} />}
+          </div>
+        </CardContent>
+      ) : null}
+    </Card>
   );
 }
 

@@ -46,3 +46,7 @@ frontend/.next/
 frontend/out/
 frontend/.env.local
 frontend/.vercel/
+
+# Local UI QA artifacts
+.playwright-cli/
+output/playwright/

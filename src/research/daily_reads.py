@@ -17,15 +17,21 @@ DAILY_READ_QUERIES: dict[str, list[str]] = {
     "macro_strategy": [
         "site:pdf.dfcfw.com 宏观 策略 研报 PDF 2026",
         "中金 宏观 策略 研报 2026 市场",
+        "site:pbc.gov.cn 货币政策执行报告 2026",
+        "site:gov.cn 国务院 金融 资本市场 政策 2026",
+        "site:stats.gov.cn 国民经济 运行情况 2026",
         "BlackRock Investment Institute 2026 outlook market policy rates",
     ],
     "company_industry": [
         "site:pdf.dfcfw.com 行业研究 研报 PDF 2026",
         "A股 公司 深度 研报 PDF 2026 券商",
+        "site:research.cicc.com 行业 策略 研报 2026",
         "US equity research outlook valuation sector 2026 PDF",
     ],
     "filings_earnings": [
         "site:cninfo.com.cn 年度报告 财报 2026 PDF",
+        "site:sse.com.cn 上市公司 公告 2026",
+        "site:szse.cn 上市公司 公告 2026",
         "site:hkexnews.hk annual results annual report 2026",
         "site:sec.gov 10-K annual report 2026 Apple Microsoft Nvidia",
     ],
@@ -35,7 +41,7 @@ DAILY_READ_QUERIES: dict[str, list[str]] = {
 def collect_daily_reads(max_items_per_section: int = 5) -> dict[str, Any]:
     """Collect a compact, high-signal daily reading list."""
     limit = max(1, min(max_items_per_section, 10))
-    cache_key = f"research:daily_reads:v1:{limit}"
+    cache_key = f"research:daily_reads:v3:{limit}"
     cache = get_cache()
     cached = cache.get(cache_key)
     if cached is not None:
@@ -104,7 +110,19 @@ def _daily_score(url: str, section_id: str, text: str) -> float:
     for keyword in ["pdf", "annual report", "10-k", "outlook", "策略", "研报", "年度报告", "深度"]:
         if keyword in lower:
             score += 2.0
-    if any(domain in _domain(url) for domain in ["cicc.com", "dfcfw.com", "sec.gov", "cninfo.com.cn", "hkexnews.hk"]):
+    if any(domain in _domain(url) for domain in [
+        "cicc.com",
+        "dfcfw.com",
+        "sec.gov",
+        "cninfo.com.cn",
+        "hkexnews.hk",
+        "pbc.gov.cn",
+        "gov.cn",
+        "stats.gov.cn",
+        "csrc.gov.cn",
+        "sse.com.cn",
+        "szse.cn",
+    ]):
         score += 4.0
     return min(score, 100.0)
 
@@ -177,6 +195,21 @@ def _fallback_items(section_id: str, limit: int) -> list[dict[str, Any]]:
     rows = {
         "macro_strategy": [
             {
+                "title": "中国人民银行货币政策栏目",
+                "summary": "中国人民银行（央行）货币政策、政策工具、执行报告和金融市场运行信息的一手入口。",
+                "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125227/index.html",
+            },
+            {
+                "title": "国家统计局国民经济运行数据",
+                "summary": "用于核对增长、价格、工业、消费和投资等中国宏观变量的一手统计入口。",
+                "url": "https://www.stats.gov.cn/sj/",
+            },
+            {
+                "title": "中国证监会新闻发布与政策信息",
+                "summary": "资本市场监管政策、新闻发布和制度调整的一手入口。",
+                "url": "http://www.csrc.gov.cn/csrc/c100028/common_list.shtml",
+            },
+            {
                 "title": "BlackRock Investment Institute 2026 Investment Outlook",
                 "summary": "Global outlook page covering policy, rates, growth constraints, and asset-class risk premia.",
                 "url": "https://www.blackrock.com/americas-offshore/en/insights/blackrock-investment-institute/outlook",
@@ -199,6 +232,16 @@ def _fallback_items(section_id: str, limit: int) -> list[dict[str, Any]]:
                 "url": "https://data.eastmoney.com/report/",
             },
             {
+                "title": "上海证券交易所披露入口",
+                "summary": "上海证券交易所上市公司公告、定期报告和监管信息的一手检索入口。",
+                "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/",
+            },
+            {
+                "title": "深圳证券交易所信息披露入口",
+                "summary": "深圳证券交易所上市公司公告、定期报告和监管信息的一手检索入口。",
+                "url": "https://www.szse.cn/disclosure/listed/notice/index.html",
+            },
+            {
                 "title": "SEC Company Search",
                 "summary": "Primary source entry for US listed-company filings, annual reports, 10-K, 10-Q, and 8-K documents.",
                 "url": "https://www.sec.gov/edgar/search/",
@@ -214,6 +257,16 @@ def _fallback_items(section_id: str, limit: int) -> list[dict[str, Any]]:
                 "title": "巨潮资讯公告查询",
                 "summary": "Primary China disclosure portal for listed-company announcements, annual reports, and earnings documents.",
                 "url": "https://www.cninfo.com.cn/new/disclosure",
+            },
+            {
+                "title": "上海证券交易所上市公司公告",
+                "summary": "上海市场公告、定期报告和监管披露的一手入口。",
+                "url": "https://www.sse.com.cn/disclosure/listedinfo/announcement/",
+            },
+            {
+                "title": "深圳证券交易所上市公司公告",
+                "summary": "深圳市场公告、定期报告和监管披露的一手入口。",
+                "url": "https://www.szse.cn/disclosure/listed/notice/index.html",
             },
             {
                 "title": "HKEXnews Issuer Documents",

@@ -32,6 +32,10 @@ PRIMARY_DOMAINS = (
     "szse.cn",
     "hkexnews.hk",
     "hkex.com.hk",
+    "pbc.gov.cn",
+    "stats.gov.cn",
+    "csrc.gov.cn",
+    "gov.cn",
 )
 INSTITUTIONAL_DOMAINS = (
     "pdf.dfcfw.com",
@@ -51,6 +55,11 @@ MEDIA_DOMAINS = (
     "caixin.com",
     "wallstreetcn.com",
     "sina.com.cn",
+    "eastmoney.com",
+    "10jqka.com.cn",
+    "stcn.com",
+    "cnstock.com",
+    "cs.com.cn",
 )
 _DDGS_LOCK = Lock()
 _DDGS_CLS: Any | None = None
