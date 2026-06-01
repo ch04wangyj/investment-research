@@ -86,6 +86,42 @@ def audit_research_report(report: ResearchReport) -> PublicationAudit:
             "The report was published without an opposing review.",
             "Run BearResearcher before synthesis.",
         )
+    if len(report.archive_history) < 40:
+        add(
+            "insufficient_kline_history",
+            "critical",
+            "technical",
+            "K-line history is insufficient",
+            f"Only {len(report.archive_history)} OHLCV rows are available; institutional technical context requires at least 40.",
+            "Refresh historical providers and rerun K-line collection.",
+        )
+    if not report.technical.evidence:
+        add(
+            "missing_technical_indicators",
+            "critical",
+            "technical",
+            "Technical indicator dashboard is missing",
+            "The technical analyst did not produce auditable indicator evidence.",
+            "Rerun TechnicalAnalyst after usable OHLCV history is collected.",
+        )
+    if not report.catalysts:
+        add(
+            "missing_catalysts",
+            "warning",
+            "research_depth",
+            "Catalyst monitoring list is missing",
+            "The report has no explicit event or operating catalyst list.",
+            "Add earnings, policy, product, or operating checkpoints.",
+        )
+    if not report.risks:
+        add(
+            "missing_risk_register",
+            "critical",
+            "risk",
+            "Risk register is missing",
+            "The final report does not contain a synthesized risk register.",
+            "Run risk monitoring and BearResearcher before publication.",
+        )
 
     stale_sources = [source.name for source in report.sources if source.stale]
     if stale_sources:
@@ -142,6 +178,7 @@ def audit_research_report(report: ResearchReport) -> PublicationAudit:
             "Required market anchors are present.",
             "Evidence coverage and unresolved gaps are surfaced.",
             "Bull and Bear cases both reach the publication gate.",
+            "K-line history, technical indicators, catalysts, and risk register are present.",
             "Provider freshness and fallback errors are visible.",
             "The publication gate does not claim human-level source-to-claim verification.",
         ],

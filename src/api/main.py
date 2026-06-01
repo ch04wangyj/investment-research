@@ -7,11 +7,12 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from config.settings import get_settings
 from src.agents.research.graph import run_research_pipeline
+from src.api.research_jobs import ResearchJobRegistry
 from src.core.llm import provider_catalog
 from src.data.dal import detect_market, get_dal, normalize_symbol
 from src.data.indices import fetch_all_indices
@@ -52,6 +53,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+research_jobs = ResearchJobRegistry(max_workers=2)
+
 
 class SymbolCreate(BaseModel):
     symbol: str
@@ -91,6 +94,42 @@ def _report_repo() -> AgentReportRepository:
 
 def _research_orchestrator() -> PipelineOrchestrator:
     return PipelineOrchestrator(pipeline=run_research_pipeline)
+
+
+def _workflow_snapshot(symbol: str) -> dict[str, Any] | None:
+    state = _research_orchestrator().load_state(symbol)
+    return state.to_dict() if state else None
+
+
+def _execute_research(
+    symbol: str,
+    request: ResearchRequest,
+    *,
+    agent_name: str = "ResearchDirectorAudited",
+    trigger_type: str = "manual",
+) -> dict[str, Any]:
+    execution = _research_orchestrator().run_single(
+        symbol,
+        period=request.period,
+        provider_id=request.provider_id,
+        use_llm=request.use_llm,
+        language=request.language,
+    )
+    report = execution.report
+    content = report.model_dump(mode="json")
+    _report_repo().save({
+        "agent_name": agent_name,
+        "run_id": report.run_id,
+        "ticker": report.symbol,
+        "report_type": "institutional_research",
+        "content": content,
+        "trigger_type": trigger_type,
+    })
+    return {
+        "report": content,
+        "audit": execution.audit.model_dump(mode="json"),
+        "workflow": execution.workflow.to_dict(),
+    }
 
 
 @app.get("/api/health")
@@ -363,6 +402,13 @@ def latest_research(symbol: str) -> dict[str, Any]:
 @app.get("/api/research/{symbol}/pdf")
 def research_pdf(symbol: str, lang: str = "zh") -> Response:
     normalized = normalize_symbol(symbol)
+    published = _research_orchestrator().find_published_report_pdf(normalized)
+    if published:
+        return FileResponse(
+            path=published,
+            media_type="application/pdf",
+            filename=published.name,
+        )
     rows = _report_repo().get_latest(normalized, limit=1)
     if not rows:
         raise HTTPException(status_code=404, detail="No research report found")
@@ -376,33 +422,30 @@ def research_pdf(symbol: str, lang: str = "zh") -> Response:
     )
 
 
+@app.post("/api/research/{symbol}/jobs")
+def start_research_job(symbol: str, request: ResearchRequest | None = None) -> dict[str, Any]:
+    request = request or ResearchRequest()
+    normalized = normalize_symbol(symbol)
+    return research_jobs.submit(
+        symbol=normalized,
+        execute=lambda: _execute_research(normalized, request, trigger_type="web_background"),
+        workflow=_workflow_snapshot,
+    )
+
+
+@app.get("/api/research/jobs/{job_id}")
+def research_job(job_id: str) -> dict[str, Any]:
+    job = research_jobs.get(job_id, workflow=_workflow_snapshot)
+    if not job:
+        raise HTTPException(status_code=404, detail="Research job not found")
+    return job
+
+
 @app.post("/api/research/{symbol}")
 def run_research(symbol: str, request: ResearchRequest | None = None) -> dict[str, Any]:
     request = request or ResearchRequest()
     normalized = normalize_symbol(symbol)
-    execution = _research_orchestrator().run_single(
-        normalized,
-        period=request.period,
-        provider_id=request.provider_id,
-        use_llm=request.use_llm,
-        language=request.language,
-    )
-    report = execution.report
-    content = report.model_dump(mode="json")
-    repo = _report_repo()
-    repo.save({
-        "agent_name": "ResearchDirectorAudited",
-        "run_id": report.run_id,
-        "ticker": report.symbol,
-        "report_type": "institutional_research",
-        "content": content,
-        "trigger_type": "manual",
-    })
-    return {
-        "report": content,
-        "audit": execution.audit.model_dump(mode="json"),
-        "workflow": execution.workflow.to_dict(),
-    }
+    return _execute_research(normalized, request)
 
 
 @app.post("/api/assistant/{symbol}")

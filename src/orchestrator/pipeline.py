@@ -13,6 +13,17 @@ from typing import Any, Callable
 from config.settings import get_settings
 from src.data.dal import detect_market, normalize_symbol
 from src.research.audit import audit_research_report
+from src.research.publication import (
+    archive_directory_name,
+    artifact_filename,
+    render_archive_readme,
+    render_audit_markdown,
+    render_fundamentals_markdown,
+    render_macro_markdown,
+    render_report_markdown,
+    render_technical_markdown,
+    validate_report_contract,
+)
 from src.research.schemas import PublicationAudit, ResearchReport
 
 
@@ -29,17 +40,21 @@ class StageStatus(str, Enum):
 
 
 class PipelineStage(str, Enum):
-    DATA_COLLECTION = "data_collection"
-    DEEP_RESEARCH = "deep_research"
-    REPORT_GENERATION = "report_generation"
+    KLINE = "kline"
+    FUNDAMENTALS = "fundamentals"
+    TECHNICAL = "technical"
+    MACRO = "macro"
+    REPORT = "report"
     AUDIT = "audit"
     PUBLISH = "publish"  # .md → .html + .pdf conversion
 
 
 PIPELINE_STAGES = (
-    PipelineStage.DATA_COLLECTION,
-    PipelineStage.DEEP_RESEARCH,
-    PipelineStage.REPORT_GENERATION,
+    PipelineStage.KLINE,
+    PipelineStage.FUNDAMENTALS,
+    PipelineStage.TECHNICAL,
+    PipelineStage.MACRO,
+    PipelineStage.REPORT,
     PipelineStage.AUDIT,
     PipelineStage.PUBLISH,
 )
@@ -85,6 +100,7 @@ class SymbolResult:
     audit_status: str | None = None
     report_path: str | None = None
     audit_path: str | None = None
+    archive_path: str | None = None
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
     @property
@@ -111,6 +127,7 @@ class SymbolResult:
             audit_status=data.get("audit_status"),
             report_path=data.get("report_path"),
             audit_path=data.get("audit_path"),
+            archive_path=data.get("archive_path"),
             updated_at=data.get("updated_at", datetime.now().isoformat()),
         )
 
@@ -127,6 +144,7 @@ class SymbolResult:
             "audit_status": self.audit_status,
             "report_path": self.report_path,
             "audit_path": self.audit_path,
+            "archive_path": self.archive_path,
             "updated_at": self.updated_at,
             "is_complete": self.is_complete,
         }
@@ -162,12 +180,38 @@ class PipelineOrchestrator:
             pipeline = run_research_pipeline
         self.pipeline = pipeline
 
-    def symbol_dir(self, symbol: str) -> Path:
+    def symbol_dir(self, symbol: str, company_name: str = "") -> Path:
         normalized = normalize_symbol(symbol)
-        return self.root / normalized
+        if company_name:
+            return self.root / archive_directory_name(normalized, company_name)
+        exact = self.root / normalized
+        if exact.exists():
+            return exact
+        matches = sorted(path for path in self.root.glob(f"{normalized}_*") if path.is_dir())
+        return matches[0] if matches else exact
 
     def get_state_path(self, symbol: str) -> Path:
-        return self.symbol_dir(symbol) / "pipeline_state.json"
+        return self.root / ".workflow" / f"{normalize_symbol(symbol)}.json"
+
+    def find_published_report_pdf(self, symbol: str) -> Path | None:
+        normalized = normalize_symbol(symbol)
+        archive_dirs = [
+            path
+            for path in [self.root / normalized, *self.root.glob(f"{normalized}_*")]
+            if path.is_dir()
+        ]
+        candidates = sorted(
+            (
+                pdf
+                for archive_dir in archive_dirs
+                for pdf in (archive_dir / "reports").glob(
+                    f"{normalized}_investment_report_*.pdf"
+                )
+            ),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        return candidates[0] if candidates else None
 
     def load_state(self, symbol: str) -> SymbolResult | None:
         path = self.get_state_path(symbol)
@@ -209,11 +253,15 @@ class PipelineOrchestrator:
             result.stages[stage.value] = StageResult(stage=stage)
         self.save_state(result)
 
-        active_stage = PipelineStage.DATA_COLLECTION
+        active_stage = PipelineStage.KLINE
         try:
-            self._start_stage(result, PipelineStage.DATA_COLLECTION)
-            active_stage = PipelineStage.DEEP_RESEARCH
-            self._start_stage(result, PipelineStage.DEEP_RESEARCH)
+            for stage in [
+                PipelineStage.KLINE,
+                PipelineStage.FUNDAMENTALS,
+                PipelineStage.TECHNICAL,
+                PipelineStage.MACRO,
+            ]:
+                self._start_stage(result, stage)
             report = self.pipeline(
                 normalized,
                 period=period,
@@ -221,18 +269,22 @@ class PipelineOrchestrator:
                 use_llm=use_llm,
                 language=language,
             )
-            self._complete_stage(result, PipelineStage.DATA_COLLECTION)
-            self._complete_stage(result, PipelineStage.DEEP_RESEARCH)
+            result.name = report.company_name
+            result.archive_path = str(self.symbol_dir(report.symbol, report.company_name))
+            archive_files = self._write_archive_inputs(report)
+            self._complete_stage(result, PipelineStage.KLINE, archive_files["kline"])
+            self._complete_stage(result, PipelineStage.FUNDAMENTALS, archive_files["fundamentals"])
+            self._complete_stage(result, PipelineStage.TECHNICAL, archive_files["technical"])
+            self._complete_stage(result, PipelineStage.MACRO, archive_files["macro"])
 
-            active_stage = PipelineStage.REPORT_GENERATION
+            active_stage = PipelineStage.REPORT
             self._start_stage(result, active_stage)
             report_path, report_markdown_path = self._write_report(report)
-            archive_files = self._write_archive_inputs(report)
             result.report_path = str(report_path)
             self._complete_stage(
                 result,
                 active_stage,
-                [str(report_path), str(report_markdown_path), *archive_files],
+                [str(report_path), str(report_markdown_path)],
             )
 
             active_stage = PipelineStage.AUDIT
@@ -265,7 +317,7 @@ class PipelineOrchestrator:
                 self._skip_stage(result, active_stage, "Publication is disabled by configuration.")
                 self.save_state(result)
                 return ResearchExecution(report=report, audit=audit, workflow=result)
-            publish_files = self._publish_formats(result.symbol)
+            publish_files = self._publish_formats(result)
             self._complete_stage(result, active_stage, publish_files)
 
             self.save_state(result)
@@ -307,40 +359,42 @@ class PipelineOrchestrator:
         return ResearchExecution(report=report, audit=audit, workflow=state)
 
     def _write_report(self, report: ResearchReport) -> tuple[Path, Path]:
-        report_dir = self.symbol_dir(report.symbol) / "reports"
+        report_dir = self.symbol_dir(report.symbol, report.company_name) / "reports"
         report_dir.mkdir(parents=True, exist_ok=True)
         path = report_dir / f"{report.run_id}.json"
         path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-        markdown_path = report_dir / f"{report.run_id}.md"
-        markdown_path.write_text(_report_markdown(report), encoding="utf-8")
+        markdown_path = report_dir / artifact_filename(report, "report")
+        markdown = render_report_markdown(report)
+        validate_report_contract(markdown)
+        markdown_path.write_text(markdown, encoding="utf-8")
         return path, markdown_path
 
     def _write_audit(self, report: ResearchReport, audit: PublicationAudit) -> tuple[Path, Path]:
-        audit_dir = self.symbol_dir(report.symbol) / "audit"
+        audit_dir = self.symbol_dir(report.symbol, report.company_name) / "audit"
         audit_dir.mkdir(parents=True, exist_ok=True)
         path = audit_dir / f"{report.run_id}.json"
         path.write_text(audit.model_dump_json(indent=2), encoding="utf-8")
-        markdown_path = audit_dir / f"{report.run_id}.md"
-        markdown_path.write_text(_audit_markdown(report, audit), encoding="utf-8")
+        markdown_path = audit_dir / artifact_filename(report, "audit")
+        markdown_path.write_text(render_audit_markdown(report, audit), encoding="utf-8")
         return path, markdown_path
 
-    def _write_archive_inputs(self, report: ResearchReport) -> list[str]:
+    def _write_archive_inputs(self, report: ResearchReport) -> dict[str, list[str]]:
         """Write independent archive inputs before final publication rendering."""
-        files = [
-            self._write_section(report, "fundamentals", _fundamentals_markdown(report)),
-            self._write_section(report, "technical", _technical_markdown(report)),
-            self._write_section(report, "macro", _macro_markdown(report)),
-        ]
-        files.extend(self._write_kline_files(report))
-        readme = self.symbol_dir(report.symbol) / "README.md"
-        readme.write_text(_archive_readme(report), encoding="utf-8")
-        files.append(str(readme))
+        files = {
+            "fundamentals": [self._write_section(report, "fundamentals", render_fundamentals_markdown(report))],
+            "technical": [self._write_section(report, "technical", render_technical_markdown(report))],
+            "macro": [self._write_section(report, "macro", render_macro_markdown(report))],
+            "kline": self._write_kline_files(report),
+        }
+        readme = self.symbol_dir(report.symbol, report.company_name) / "README.md"
+        readme.write_text(render_archive_readme(report), encoding="utf-8")
+        files["macro"].append(str(readme))
         return files
 
     def _write_section(self, report: ResearchReport, section: str, markdown: str) -> str:
-        directory = self.symbol_dir(report.symbol) / section
+        directory = self.symbol_dir(report.symbol, report.company_name) / section
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"{report.run_id}.md"
+        path = directory / artifact_filename(report, section)
         path.write_text(markdown, encoding="utf-8")
         return str(path)
 
@@ -360,7 +414,7 @@ class PipelineOrchestrator:
 
         start = frame["date"].iloc[0].strftime("%Y%m%d")
         end = frame["date"].iloc[-1].strftime("%Y%m%d")
-        kline_dir = self.symbol_dir(report.symbol) / "kline"
+        kline_dir = self.symbol_dir(report.symbol, report.company_name) / "kline"
         daily_dir = kline_dir / "daily"
         weekly_dir = kline_dir / "weekly"
         daily_dir.mkdir(parents=True, exist_ok=True)
@@ -437,7 +491,7 @@ class PipelineOrchestrator:
             raise ValueError("Each batch item requires a symbol")
         return {"symbol": str(item["symbol"]), "name": str(item.get("name", ""))}
 
-    def _publish_formats(self, symbol: str) -> list[str]:
+    def _publish_formats(self, result: SymbolResult) -> list[str]:
         """Convert all .md outputs to .html + .pdf using the Moutai-standard pipeline.
 
         Calls scripts/md2pdf.py which:
@@ -447,7 +501,7 @@ class PipelineOrchestrator:
         import subprocess
         import sys
 
-        sym_dir = self.symbol_dir(symbol)
+        sym_dir = Path(result.archive_path or self.symbol_dir(result.symbol))
         script = Path(__file__).resolve().parent.parent.parent / "scripts" / "md2pdf.py"
         if not script.exists():
             raise FileNotFoundError(f"md2pdf.py not found at {script}")

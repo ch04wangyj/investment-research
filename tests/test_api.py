@@ -49,6 +49,27 @@ def test_run_research_endpoint_with_mock_pipeline(monkeypatch):
     assert response.json()["workflow"]["stages"]["audit"]["status"] == "completed"
 
 
+def test_start_and_read_background_research_job(monkeypatch):
+    class FakeJobs:
+        def submit(self, *, symbol, execute, workflow):
+            return {"job_id": "job-1", "symbol": symbol, "status": "queued"}
+
+        def get(self, job_id, *, workflow):
+            if job_id != "job-1":
+                return None
+            return {"job_id": job_id, "symbol": "AAPL", "status": "running", "workflow": {"stages": {}}}
+
+    monkeypatch.setattr("src.api.main.research_jobs", FakeJobs())
+    client = TestClient(app)
+    started = client.post("/api/research/AAPL/jobs", json={"use_llm": False})
+    assert started.status_code == 200
+    assert started.json()["job_id"] == "job-1"
+    running = client.get("/api/research/jobs/job-1")
+    assert running.status_code == 200
+    assert running.json()["status"] == "running"
+    assert client.get("/api/research/jobs/missing").status_code == 404
+
+
 def test_pdf_endpoint_returns_pdf(monkeypatch):
     class FakeRow:
         id = 1
@@ -189,7 +210,7 @@ def test_workflow_blueprint_endpoint():
     assert response.status_code == 200
     data = response.json()
     assert {item["framework"] for item in data["comparisons"]} >= {"TradingAgents", "FinRobot", "OpenBB"}
-    assert len(data["registered_agents"]) == 6
+    assert len(data["registered_agents"]) >= 8
 
 
 def test_workflow_agents_endpoint():
@@ -198,9 +219,11 @@ def test_workflow_agents_endpoint():
     assert response.status_code == 200
     assert {item["id"] for item in response.json()["agents"]} >= {
         "kline-collector",
+        "information-curator",
         "fundamentals-researcher",
         "macro-researcher",
         "technical-analyst",
+        "institutional-report-editor",
         "report-writer",
         "research-auditor",
     }

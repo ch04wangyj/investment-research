@@ -5,6 +5,8 @@ copying code: specialist analysts produce typed sections, then a research
 director synthesizes a single Pydantic ResearchReport.
 """
 
+import json
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -16,11 +18,12 @@ from config.settings import get_settings
 from src.analysis.technical import compute_technical_snapshot
 from src.core.llm import create_chat_model
 from src.data.dal import detect_market, get_dal, normalize_symbol
-from src.data.news_fetcher import fetch_financial_news
+from src.data.news_fetcher import fetch_financial_news, is_company_news_item
 from src.research.schemas import (
     AnalystView,
     DataSource,
     InformationSummary,
+    InstitutionalNarrative,
     PipelineDiagnostics,
     ResearchEvidenceBook,
     ResearchReport,
@@ -57,6 +60,7 @@ class ResearchState(TypedDict, total=False):
     bull_case: list[str]
     bear_case: list[str]
     trading_strategy: TradingStrategy
+    institutional_narrative: InstitutionalNarrative
     report: ResearchReport
     llm_status: str
     errors: list[str]
@@ -79,6 +83,7 @@ def build_research_graph(parallel: bool = False):
         workflow.add_node("RiskMonitor", risk_monitor)
         workflow.add_node("BullResearcher", bull_researcher)
         workflow.add_node("BearResearcher", bear_researcher)
+        workflow.add_node("InstitutionalReportEditor", institutional_report_editor)
         workflow.add_node("ResearchDirector", research_director)
 
         workflow.set_entry_point("ParallelDataCollector")
@@ -94,6 +99,7 @@ def build_research_graph(parallel: bool = False):
         workflow.add_node("RiskMonitor", risk_monitor)
         workflow.add_node("BullResearcher", bull_researcher)
         workflow.add_node("BearResearcher", bear_researcher)
+        workflow.add_node("InstitutionalReportEditor", institutional_report_editor)
         workflow.add_node("ResearchDirector", research_director)
 
         workflow.set_entry_point("DataCollector")
@@ -107,7 +113,8 @@ def build_research_graph(parallel: bool = False):
     workflow.add_edge("NewsSentimentAnalyst", "RiskMonitor")
     workflow.add_edge(["FundamentalAnalyst", "TechnicalAnalyst", "MacroAnalyst", "RiskMonitor"], "BullResearcher")
     workflow.add_edge(["FundamentalAnalyst", "TechnicalAnalyst", "MacroAnalyst", "RiskMonitor"], "BearResearcher")
-    workflow.add_edge(["BullResearcher", "BearResearcher"], "ResearchDirector")
+    workflow.add_edge(["BullResearcher", "BearResearcher"], "InstitutionalReportEditor")
+    workflow.add_edge("InstitutionalReportEditor", "ResearchDirector")
     workflow.add_edge("ResearchDirector", END)
     return workflow.compile(name="InstitutionalResearchPipeline")
 
@@ -590,12 +597,33 @@ def technical_analyst(state: ResearchState) -> dict[str, Any]:
         score += max(min(momentum / 2, 12), -12)
 
     view = AnalystView(
-        summary=snapshot["summary"],
+        summary=_technical_summary(snapshot, state.get("language", "zh")),
         score=_clamp(score),
         evidence=[f"{key}: {value}" for key, value in indicators.items() if value is not None],
         data_quality=snapshot["data_quality"],
     )
     return {"technical": view}
+
+
+def _technical_summary(snapshot: dict[str, Any], language: str) -> str:
+    if language == "en":
+        return str(snapshot["summary"])
+    indicators = snapshot.get("indicators", {})
+    if not indicators:
+        return "历史价格数据不足，暂无法形成完整价格背景判断。"
+    trend = {
+        "uptrend": "上升趋势",
+        "downtrend": "下降趋势",
+        "neutral": "中性趋势",
+    }.get(indicators.get("trend"), "趋势未明")
+    parts = [f"当前处于{trend}"]
+    if indicators.get("momentum_pct") is not None:
+        parts.append(f"所选周期动量 {float(indicators['momentum_pct']):.1f}%")
+    if indicators.get("rsi_14") is not None:
+        parts.append(f"RSI 为 {float(indicators['rsi_14']):.1f}")
+    if indicators.get("annualized_volatility_pct") is not None:
+        parts.append(f"年化波动率 {float(indicators['annualized_volatility_pct']):.1f}%")
+    return "；".join(parts) + "。"
 
 
 def news_sentiment_analyst(state: ResearchState) -> dict[str, Any]:
@@ -608,7 +636,8 @@ def news_sentiment_analyst(state: ResearchState) -> dict[str, Any]:
         news = []
         state.setdefault("errors", []).append(f"news: {exc}")
 
-    evidence = [item.get("title", "") for item in news if item.get("title")]
+    company_news = [item for item in news if is_company_news_item(item)]
+    evidence = [item.get("title", "") for item in company_news if item.get("title")]
     evidence.extend(item.title for item in evidence_book.channel_analysis[:4])
     evidence.extend(item.title for item in evidence_book.institutional_reports[:3])
     if evidence:
@@ -631,7 +660,7 @@ def news_sentiment_analyst(state: ResearchState) -> dict[str, Any]:
             evidence=evidence[:5],
             data_quality="limited" if evidence else "missing",
         ),
-        "news": news,
+        "news": company_news,
     }
 
 
@@ -651,15 +680,17 @@ def risk_monitor(state: ResearchState) -> dict[str, Any]:
 BULL_SYSTEM_PROMPT = """You are an OPTIMISTIC senior investment analyst. Your job is to build the strongest possible BULL case.
 
 Given the same data the research team has collected, identify upside potential:
-- Undervaluation signals (low multiples relative to peers/growth)
+- Undervaluation signals supported by collected multiples
 - Improving fundamentals (rising ROE, margin expansion, revenue acceleration)
 - Supportive macro, policy, or industry-cycle context
 - Favorable public research, filings, sentiment, or overlooked catalysts
 - Hidden assets, growth optionality, or turnaround potential
 
 Rules:
-- Base every argument on the data provided — do NOT fabricate numbers
-- Quantify when possible ("PE of 12x is a 30% discount to sector average")
+- Base every argument on the supplied structured facts and evidence titles only
+- Do NOT fabricate historical averages, peer comparisons, growth rates, forecasts, or causal claims
+- Treat search-result titles as leads, not as verified full-text findings
+- Quantify only with numbers explicitly present in the supplied context
 - Acknowledge risks briefly but reframe as potential opportunities
 - Output 2-4 concise evidence bullet points
 - Rate your conviction from 0-100 based on data quality and signal strength
@@ -677,8 +708,10 @@ Given the same data the research team has collected, identify downside risks:
 - Hidden liabilities, execution risk, or structural decline
 
 Rules:
-- Base every argument on the data provided — do NOT fabricate numbers
-- Quantify when possible
+- Base every argument on the supplied structured facts and evidence titles only
+- Do NOT fabricate historical averages, peer comparisons, growth rates, forecasts, or causal claims
+- Treat search-result titles as leads, not as verified full-text findings
+- Quantify only with numbers explicitly present in the supplied context
 - Acknowledge positive factors but explain why they may not materialize
 - Output 2-4 concise evidence bullet points
 - Rate your conviction from 0-100 based on data quality and signal strength
@@ -762,8 +795,13 @@ def _call_llm_analyst(
             state.get("provider_id"), tier="quick", temperature=0.7
         )
         data_context = _build_data_context(state)
+        language_rule = (
+            "Write every prose field in concise professional English."
+            if state.get("language") == "en"
+            else "所有 prose 字段必须使用专业、克制的简体中文。"
+        )
         response = llm.invoke([
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": f"{system_prompt}\n\nLanguage rule: {language_rule}"},
             {"role": "user", "content": data_context},
         ])
         content = str(response.content)
@@ -808,25 +846,26 @@ def _call_llm_analyst(
 
 def _analyst_heuristic(state: ResearchState, role: str) -> AnalystView:
     """Rule-based fallback when LLM is unavailable."""
+    zh = state.get("language") != "en"
     if role == "BullResearcher":
         score = 50.0
         evidence = []
         if state["financial_quality"].score >= 60:
-            evidence.append("Financial quality screens above neutral.")
+            evidence.append("财务质量筛查高于中性水平。" if zh else "Financial quality screens above neutral.")
             score += 10
         if state["valuation"].score >= 60:
-            evidence.append("Valuation appears reasonable.")
+            evidence.append("当前估值筛查结果相对合理。" if zh else "Valuation appears reasonable.")
             score += 10
         if state.get("macro_context") and state["macro_context"].score >= 58:
-            evidence.append("Macro and policy context is not obviously hostile.")
+            evidence.append("宏观和政策背景未呈现明显逆风。" if zh else "Macro and policy context is not obviously hostile.")
             score += 8
         if state.get("evidence_book") and state["evidence_book"].institutional_reports:
-            evidence.append("Public institutional report candidates are available for cross-checking.")
+            evidence.append("已有公开机构研报线索可供交叉核验。" if zh else "Public institutional report candidates are available for cross-checking.")
             score += 6
         if not evidence:
-            evidence.append("Upside depends on execution and sentiment improvement.")
+            evidence.append("上行空间依赖经营执行和情绪改善。" if zh else "Upside depends on execution and sentiment improvement.")
         return AnalystView(
-            summary="Bull case based on available data.",
+            summary="基于现有资料形成看多论点。" if zh else "Bull case based on available data.",
             score=_clamp(score),
             evidence=evidence[:4],
             data_quality="limited",
@@ -835,16 +874,16 @@ def _analyst_heuristic(state: ResearchState, role: str) -> AnalystView:
         score = 50.0
         evidence = []
         if state["valuation"].score <= 45:
-            evidence.append("Valuation leaves limited margin of safety.")
+            evidence.append("估值安全边际有限。" if zh else "Valuation leaves limited margin of safety.")
             score -= 10
         if state.get("macro_context") and state["macro_context"].score <= 45:
-            evidence.append("Macro or policy context is weak or insufficiently supported.")
+            evidence.append("宏观或政策背景偏弱，或证据支持不足。" if zh else "Macro or policy context is weak or insufficiently supported.")
             score -= 8
         if state["sentiment"].data_quality != "high":
-            evidence.append("Sentiment coverage is incomplete.")
+            evidence.append("情绪资料覆盖仍不完整。" if zh else "Sentiment coverage is incomplete.")
             score -= 5
         if state.get("errors"):
-            evidence.append("Provider errors reduce reliability.")
+            evidence.append("数据源错误降低了结论可靠性。" if zh else "Provider errors reduce reliability.")
             score -= 5
         severe_alerts = [
             alert for alert in state.get("risk_alerts", [])
@@ -854,9 +893,9 @@ def _analyst_heuristic(state: ResearchState, role: str) -> AnalystView:
             evidence.append(f"{alert.title}: {alert.message}")
             score -= 4 if alert.severity == "warning" else 8
         if not evidence:
-            evidence.append("Bear case centers on macro and execution risk.")
+            evidence.append("看空论点主要聚焦宏观与经营执行风险。" if zh else "Bear case centers on macro and execution risk.")
         return AnalystView(
-            summary="Bear case based on available data.",
+            summary="基于现有资料形成看空论点。" if zh else "Bear case based on available data.",
             score=_clamp(score),
             evidence=evidence[:4],
             data_quality="limited",
@@ -868,6 +907,7 @@ def bull_researcher(state: ResearchState) -> dict[str, Any]:
         view = _call_llm_analyst(state, BULL_SYSTEM_PROMPT, "BullResearcher")
     else:
         view = _analyst_heuristic(state, "BullResearcher")
+    view = view.model_copy(update={"evidence": _label_unverified_hypotheses(view.evidence, state.get("language", "zh"))})
     return {"bull_case": view.evidence, "_bull_view": view}
 
 
@@ -876,7 +916,180 @@ def bear_researcher(state: ResearchState) -> dict[str, Any]:
         view = _call_llm_analyst(state, BEAR_SYSTEM_PROMPT, "BearResearcher")
     else:
         view = _analyst_heuristic(state, "BearResearcher")
+    view = view.model_copy(update={"evidence": _label_unverified_hypotheses(view.evidence, state.get("language", "zh"))})
     return {"bear_case": view.evidence, "_bear_view": view}
+
+
+def _label_unverified_hypotheses(arguments: list[str], language: str) -> list[str]:
+    prefix = "[Unverified hypothesis] " if language == "en" else "[待验证假设] "
+    return [argument if argument.startswith(prefix) else f"{prefix}{argument}" for argument in arguments]
+
+
+def institutional_report_editor(state: ResearchState) -> dict[str, Any]:
+    """Draft evidence-bounded narrative sections for the publication renderer."""
+
+    fallback = _institutional_narrative_fallback(state)
+    if not state.get("use_llm"):
+        return {"institutional_narrative": fallback}
+
+    language_instruction = (
+        "Write in concise professional English. "
+        if state.get("language") == "en"
+        else "请使用专业、克制、清晰的简体中文，风格接近机构内部研报。"
+    )
+    prompt = f"""You are the InstitutionalReportEditor in a guarded multi-agent equity research workflow.
+{language_instruction}
+Use only the supplied facts, source leads, analyst scores, risk alerts, and Bull/Bear arguments.
+Do not invent financial forecasts, policy events, target-price models, peer data, or source verification.
+Treat Bull/Bear arguments as unverified hypotheses. Repeat them only when independently supported by supplied structured facts or evidence titles.
+Never introduce historical averages, peer comparisons, profitability baselines, or causal claims unless explicitly present in the supplied context.
+If evidence is thin, explicitly state the limitation. Distinguish verified structured data from public-search leads.
+Write substantive paragraphs suitable for an institutional research archive. Return JSON only with these keys:
+executive_summary, company_analysis, macro_analysis, valuation_analysis, technical_analysis,
+catalyst_analysis, risk_analysis, evidence_notes.
+
+{_build_data_context(state)}
+
+### Bull Case
+{json.dumps(state.get("bull_case", []), ensure_ascii=False)}
+
+### Bear Case
+{json.dumps(state.get("bear_case", []), ensure_ascii=False)}
+"""
+    try:
+        llm = create_chat_model(state.get("provider_id"), tier="deep", temperature=0.2)
+        response = llm.invoke(prompt)
+        parsed = _extract_json_object(str(response.content))
+        narrative = InstitutionalNarrative.model_validate(parsed)
+        return {
+            "institutional_narrative": _sanitize_institutional_narrative(
+                narrative,
+                fallback=fallback,
+                language=state.get("language", "zh"),
+            )
+        }
+    except Exception:
+        from loguru import logger
+        logger.warning("InstitutionalReportEditor failed, using deterministic narrative fallback")
+        return {"institutional_narrative": fallback}
+
+
+def _institutional_narrative_fallback(state: ResearchState) -> InstitutionalNarrative:
+    info = state.get("information_summary") or InformationSummary()
+    evidence_book = state.get("evidence_book") or ResearchEvidenceBook()
+    alerts = state.get("risk_alerts", [])
+    return InstitutionalNarrative(
+        executive_summary=info.summary or "结构化资料已完成采集，仍需结合数据缺口审慎阅读。",
+        company_analysis=(
+            f"{state['financial_quality'].summary} {state['valuation'].summary} "
+            f"当前公司层面判断基于 {len(evidence_book.filings)} 条披露线索和 "
+            f"{len(evidence_book.institutional_reports)} 条公开机构研报线索。"
+        ),
+        macro_analysis=state["macro_context"].summary,
+        valuation_analysis=(
+            f"{state['valuation'].summary} 当前估值结论用于筛查和情景锚定；"
+            "在盈利预测、自由现金流和可比公司数据未独立核验前，不输出 DCF 结论。"
+        ),
+        technical_analysis=state["technical"].summary,
+        catalyst_analysis="；".join(_build_catalysts(state)[:5]),
+        risk_analysis="；".join(_build_risks(state)[:6]),
+        evidence_notes=(
+            f"共收集 {evidence_book.total_items} 条外部资料线索。"
+            f"数据缺口：{'；'.join(info.data_gaps[:5]) or '未识别额外缺口'}。"
+            f"当前风险告警 {len(alerts)} 条。"
+        ),
+    )
+
+
+_UNVERIFIED_EDITOR_CLAIM = re.compile(
+    r"(?:"
+    r"历史(?:均值|中枢|分位|低位|高位|心理)"
+    r"|长期(?:均值|中枢)"
+    r"|心理(?:低位|高位)"
+    r"|同行(?:比较|对比|估值)"
+    r"|同业(?:比较|对比|估值)"
+    r"|行业平均"
+    r"|已定价"
+    r"|具备修复弹性"
+    r"|必然"
+    r"|确定性"
+    r"|historical\s+(?:average|range|low|high|percentile)"
+    r"|peer\s+(?:comparison|multiple|valuation)"
+    r"|sector\s+average"
+    r"|priced\s+in"
+    r")",
+    flags=re.IGNORECASE,
+)
+_EDITOR_CAVEAT = re.compile(
+    r"(?:"
+    r"缺少|尚缺|未(?:获得|接入|引入|核验|覆盖|识别|提供|披露)|无法|不能"
+    r"|仅(?:能|作|作为|呈现)|需要|有待|仍待|若|可能|线索|标题|假设|不输出"
+    r"|missing|without|not\s+available|cannot|could|may|if\s|lead|hypothesis|unverified"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+
+def _sanitize_institutional_narrative(
+    narrative: InstitutionalNarrative,
+    *,
+    fallback: InstitutionalNarrative,
+    language: str,
+) -> InstitutionalNarrative:
+    """Drop unsupported comparative claims before they enter the publication archive."""
+
+    clean: dict[str, str] = {}
+    fallback_data = fallback.model_dump()
+    removed = False
+    for field, text in narrative.model_dump().items():
+        kept = []
+        for sentence in re.split(r"(?<=[。！？!?])\s*", str(text).strip()):
+            if not sentence:
+                continue
+            if _UNVERIFIED_EDITOR_CLAIM.search(sentence) and not _EDITOR_CAVEAT.search(sentence):
+                removed = True
+                continue
+            kept.append(sentence)
+        clean[field] = "".join(kept).strip() or str(fallback_data.get(field, ""))
+
+    if removed:
+        note = (
+            "Claim guard removed comparative or predictive statements that lacked independently verified evidence."
+            if language == "en"
+            else "证据约束层已过滤缺乏独立核验的历史比较、同行比较或预测性表述。"
+        )
+        clean["evidence_notes"] = f"{clean['evidence_notes']} {note}".strip()
+    return InstitutionalNarrative.model_validate(clean)
+
+
+def _extract_json_object(content: str) -> dict[str, Any]:
+    """Extract one JSON object without trusting surrounding model prose."""
+
+    fenced = content.strip()
+    if fenced.startswith("```"):
+        fenced = fenced.removeprefix("```json").removeprefix("```").strip()
+        fenced = fenced.removesuffix("```").strip()
+    try:
+        parsed = json.loads(fenced)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    depth = 0
+    start = None
+    for index, char in enumerate(content):
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                parsed = json.loads(content[start : index + 1])
+                if isinstance(parsed, dict):
+                    return parsed
+    raise ValueError("LLM response did not contain a JSON object")
 
 
 def trading_strategist(state: ResearchState) -> dict[str, Any]:
@@ -1117,6 +1330,7 @@ def research_director(state: ResearchState) -> dict[str, Any]:
         trading_strategy=None,
         risk_alerts=alerts,
         pipeline_diagnostics=_build_pipeline_diagnostics(state, alerts, penalty),
+        institutional_narrative=state.get("institutional_narrative", InstitutionalNarrative()),
         bull_case=state.get("bull_case", []),
         bear_case=state.get("bear_case", []),
         catalysts=_build_catalysts(state),
@@ -1229,6 +1443,7 @@ def _clamp(value: float) -> float:
 def _build_catalysts(state: ResearchState) -> list[str]:
     """Generate dynamic catalysts based on actual analysis results."""
     catalysts = []
+    zh = state.get("language") != "en"
     macro = state.get("macro_context")
     val = state.get("valuation")
     quality = state.get("financial_quality")
@@ -1238,33 +1453,48 @@ def _build_catalysts(state: ResearchState) -> list[str]:
 
     if macro and macro.score >= 58:
         catalysts.append(
-            f"Macro/policy context is at least supportive "
-            f"(score: {macro.score:.0f}/100)"
+            f"宏观和政策背景至少未形成明显逆风（评分：{macro.score:.0f}/100）"
+            if zh
+            else f"Macro/policy context is at least supportive (score: {macro.score:.0f}/100)"
         )
     if val and val.score >= 60:
         catalysts.append(
-            f"Favorable valuation (score: {val.score:.0f}/100) "
-            f"supports upside potential"
+            f"估值筛查相对有利（评分：{val.score:.0f}/100），可继续核验潜在上行空间"
+            if zh
+            else f"Favorable valuation (score: {val.score:.0f}/100) supports upside potential"
         )
     if quality and quality.score >= 60:
         catalysts.append(
-            f"Financial quality metrics above threshold "
-            f"(score: {quality.score:.0f}/100)"
+            f"财务质量指标高于阈值（评分：{quality.score:.0f}/100）"
+            if zh
+            else f"Financial quality metrics above threshold (score: {quality.score:.0f}/100)"
         )
     if sentiment and sentiment.evidence:
         first = sentiment.evidence[0]
-        catalysts.append(f"Market sentiment: {first[:120]}")
+        catalysts.append(f"市场情绪线索：{first[:120]}" if zh else f"Market sentiment: {first[:120]}")
     if evidence_book.filings:
-        catalysts.append(f"Primary filing to review: {evidence_book.filings[0].title[:120]}")
+        catalysts.append(
+            f"待复核一手披露：{evidence_book.filings[0].title[:120]}"
+            if zh
+            else f"Primary filing to review: {evidence_book.filings[0].title[:120]}"
+        )
     if evidence_book.institutional_reports:
-        catalysts.append(f"External report lead: {evidence_book.institutional_reports[0].title[:120]}")
+        catalysts.append(
+            f"待复核外部研报：{evidence_book.institutional_reports[0].title[:120]}"
+            if zh
+            else f"External report lead: {evidence_book.institutional_reports[0].title[:120]}"
+        )
     if info and info.data_gaps:
         catalysts.append(
-            "Improved data coverage could reveal additional upside signals"
+            "补齐数据覆盖后，可能识别更多上行信号"
+            if zh
+            else "Improved data coverage could reveal additional upside signals"
         )
     if not catalysts:
         catalysts.append(
-            "Earnings or operating updates are the primary catalyst to monitor"
+            "财报或经营更新是当前需要跟踪的主要催化剂"
+            if zh
+            else "Earnings or operating updates are the primary catalyst to monitor"
         )
     return catalysts
 
@@ -1272,6 +1502,7 @@ def _build_catalysts(state: ResearchState) -> list[str]:
 def _build_risks(state: ResearchState) -> list[str]:
     """Generate dynamic risks based on actual analysis results."""
     risks = []
+    zh = state.get("language") != "en"
     macro = state.get("macro_context")
     val = state.get("valuation")
     quality = state.get("financial_quality")
@@ -1281,37 +1512,41 @@ def _build_risks(state: ResearchState) -> list[str]:
 
     if macro and macro.score < 45:
         risks.append(
-            f"Macro, policy, or cycle context is weak or poorly evidenced "
-            f"(score: {macro.score:.0f}/100)"
+            f"宏观、政策或周期背景偏弱，或证据不足（评分：{macro.score:.0f}/100）"
+            if zh
+            else f"Macro, policy, or cycle context is weak or poorly evidenced (score: {macro.score:.0f}/100)"
         )
     if val and val.score < 45:
         risks.append(
-            f"Elevated valuation leaves limited margin of safety "
-            f"(score: {val.score:.0f}/100)"
+            f"估值偏高，安全边际有限（评分：{val.score:.0f}/100）"
+            if zh
+            else f"Elevated valuation leaves limited margin of safety (score: {val.score:.0f}/100)"
         )
     if quality and quality.score < 45:
         risks.append(
-            f"Below-average profitability or financial quality "
-            f"(score: {quality.score:.0f}/100)"
+            f"盈利能力或财务质量低于平均水平（评分：{quality.score:.0f}/100）"
+            if zh
+            else f"Below-average profitability or financial quality (score: {quality.score:.0f}/100)"
         )
     if sentiment and sentiment.data_quality != "high":
-        risks.append("Incomplete sentiment coverage reduces confidence")
+        risks.append("情绪资料覆盖不完整，结论置信度需要下调" if zh else "Incomplete sentiment coverage reduces confidence")
     if not evidence_book.filings:
-        risks.append("No primary filing or annual-report source was found in public search")
+        risks.append("公开搜索未找到一手披露或年报来源" if zh else "No primary filing or annual-report source was found in public search")
     if not evidence_book.institutional_reports:
-        risks.append("No public institutional research report source was found")
+        risks.append("未找到公开机构研报来源" if zh else "No public institutional research report source was found")
     if info and info.data_gaps:
         gaps_text = ", ".join(info.data_gaps[:3])
-        risks.append(f"Data gaps: {gaps_text}")
+        risks.append(f"数据缺口：{gaps_text}" if zh else f"Data gaps: {gaps_text}")
     if state.get("errors"):
         risks.append(
-            f"Provider errors in {len(state['errors'])} data source(s) "
-            f"reduce reliability"
+            f"{len(state['errors'])} 个数据源出现错误，结论可靠性下降"
+            if zh
+            else f"Provider errors in {len(state['errors'])} data source(s) reduce reliability"
         )
     for alert in state.get("risk_alerts", [])[:5]:
         risks.append(f"{alert.title}: {alert.message}")
     if not risks:
-        risks.append("Macro and rates volatility is the primary external risk")
+        risks.append("宏观与利率波动是主要外部风险" if zh else "Macro and rates volatility is the primary external risk")
     return risks
 
 

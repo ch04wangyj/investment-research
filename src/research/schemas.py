@@ -119,6 +119,17 @@ class PipelineDiagnostics(BaseModel):
     confidence_adjustments: list[str] = Field(default_factory=list)
 
 
+class InstitutionalNarrative(BaseModel):
+    executive_summary: str = ""
+    company_analysis: str = ""
+    macro_analysis: str = ""
+    valuation_analysis: str = ""
+    technical_analysis: str = ""
+    catalyst_analysis: str = ""
+    risk_analysis: str = ""
+    evidence_notes: str = ""
+
+
 class AuditFinding(BaseModel):
     code: str
     severity: AuditSeverity
@@ -178,6 +189,7 @@ class ResearchReport(BaseModel):
     trading_strategy: TradingStrategy | None = None
     risk_alerts: list[RiskAlert] = Field(default_factory=list)
     pipeline_diagnostics: PipelineDiagnostics = Field(default_factory=PipelineDiagnostics)
+    institutional_narrative: InstitutionalNarrative = Field(default_factory=InstitutionalNarrative)
     publication_audit: PublicationAudit | None = None
     bull_case: list[str] = Field(default_factory=list)
     bear_case: list[str] = Field(default_factory=list)

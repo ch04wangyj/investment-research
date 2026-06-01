@@ -22,6 +22,7 @@ def _report(**overrides):
         "thesis": "Evidence-backed thesis",
         "valuation": view,
         "financial_quality": view,
+        "technical": view,
         "sentiment": view,
         "information_summary": InformationSummary(source_count=4),
         "research_evidence": ResearchEvidenceBook(
@@ -44,7 +45,10 @@ def _report(**overrides):
         ),
         "bull_case": ["Demand remains resilient."],
         "bear_case": ["Valuation may compress."],
+        "catalysts": ["Quarterly earnings review."],
+        "risks": ["Demand slowdown."],
         "sources": [DataSource(name="fake", stale=False)],
+        "archive_history": [{"date": f"2026-01-{(index % 28) + 1:02d}"} for index in range(60)],
     }
     values.update(overrides)
     return ResearchReport(**values)

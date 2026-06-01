@@ -43,3 +43,8 @@ def test_akshare_global_news_normalizes_china_metadata(monkeypatch):
     assert rows[0]["source_region"] == "cn"
     assert rows[0]["source_channel"] == "akshare_global_em"
     assert rows[0]["category"] == "policy"
+
+
+def test_single_symbol_news_filter_excludes_macro_roll_but_keeps_company_search():
+    assert not news_fetcher.is_company_news_item({"source_channel": "sina_roll"})
+    assert news_fetcher.is_company_news_item({"source_channel": "google_news_rss"})

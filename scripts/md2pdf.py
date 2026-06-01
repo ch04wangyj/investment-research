@@ -13,7 +13,9 @@ Output: {input_stem}.pdf alongside the .md file (same directory)
 from __future__ import annotations
 
 import subprocess
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -67,26 +69,43 @@ def html_to_pdf(html_path: Path) -> Path:
     if pdf_path.exists():
         pdf_path.unlink()
     abs_url = html_path.resolve().as_uri()  # file:///E:/StockResearch/...
-    subprocess.run(
-        [
-            edge,
-            "--headless",
-            "--disable-gpu",
-            f"--print-to-pdf={pdf_path}",
-            "--no-pdf-header-footer",
-            abs_url,
-        ],
-        capture_output=True,
-        timeout=60,
-        check=True,
+    errors = []
+    for attempt in range(2):
+        profile_dir = tempfile.mkdtemp(prefix="investment-research-edge-")
+        try:
+            result = subprocess.run(
+                [
+                    edge,
+                    "--headless",
+                    "--disable-gpu",
+                    "--no-first-run",
+                    f"--user-data-dir={profile_dir}",
+                    f"--print-to-pdf={pdf_path}",
+                    "--no-pdf-header-footer",
+                    abs_url,
+                ],
+                capture_output=True,
+                timeout=90,
+            )
+            if result.returncode != 0:
+                errors.append(f"attempt {attempt + 1}: browser exit code {result.returncode}")
+            for _ in range(100):
+                if pdf_path.exists() and pdf_path.stat().st_size > 0:
+                    return pdf_path
+                time.sleep(0.2)
+            errors.append(f"attempt {attempt + 1}: browser returned without a PDF")
+        except subprocess.TimeoutExpired:
+            errors.append(f"attempt {attempt + 1}: browser print timed out")
+        finally:
+            # Edge Crashpad may briefly retain profile files after print completes.
+            # Cleanup is best-effort; the PDF existence check remains authoritative.
+            shutil.rmtree(profile_dir, ignore_errors=True)
+        if pdf_path.exists():
+            pdf_path.unlink()
+    raise RuntimeError(
+        f"Browser returned success but PDF was not created: {pdf_path}. "
+        + "; ".join(errors)
     )
-    for _ in range(25):
-        if pdf_path.exists() and pdf_path.stat().st_size > 0:
-            break
-        time.sleep(0.2)
-    if not pdf_path.exists() or pdf_path.stat().st_size <= 0:
-        raise RuntimeError(f"Browser returned success but PDF was not created: {pdf_path}")
-    return pdf_path
 
 
 def md_to_pdf(md_path: str | Path) -> Path:

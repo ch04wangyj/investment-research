@@ -50,3 +50,4 @@ frontend/.vercel/
 # Local UI QA artifacts
 .playwright-cli/
 output/playwright/
+.runtime/

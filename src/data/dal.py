@@ -9,6 +9,8 @@ from loguru import logger
 from src.data.cache import get_cache
 from src.data.providers.akshare_provider import (
     AshareAkshareProvider,
+    EastmoneyAshareProvider,
+    EastmoneyHkProvider,
     HkAkshareProvider,
     SinaAshareProvider,
     SinaHkProvider,
@@ -33,8 +35,18 @@ class DataAccessLayer:
     ):
         self._cache = cache or get_cache()
         self._providers = providers or {
-            "ashare": [AshareAkshareProvider(), SinaAshareProvider(), YahooChartProvider("ashare")],
-            "hk": [HkAkshareProvider(), SinaHkProvider(), YahooChartProvider("hk")],
+            "ashare": [
+                AshareAkshareProvider(),
+                EastmoneyAshareProvider(),
+                SinaAshareProvider(),
+                YahooChartProvider("ashare"),
+            ],
+            "hk": [
+                HkAkshareProvider(),
+                EastmoneyHkProvider(),
+                SinaHkProvider(),
+                YahooChartProvider("hk"),
+            ],
             "us": [UsAkshareProvider(), NasdaqUsProvider(), YahooChartProvider("us"), YfinanceProvider()],
         }
 

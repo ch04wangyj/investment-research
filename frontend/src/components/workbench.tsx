@@ -58,6 +58,7 @@ import {
   type Quote,
   type RatingSummary,
   type ResearchIntelligence,
+  type ResearchJob,
   type ResearchReport,
   type RiskAlert,
   type RiskSummary,
@@ -127,6 +128,29 @@ const defaultRiskSummary: RiskSummary = {
   highest: "info",
 };
 
+async function waitForResearchJob(
+  jobId: string,
+  lang: Lang,
+  onProgress: (message: string) => void,
+) {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const job = await apiGet<ResearchJob>(`/api/research/jobs/${encodeURIComponent(jobId)}`, { timeoutMs: 8000 });
+    const stages = job.workflow?.stages || {};
+    const activeStage = Object.values(stages).find((stage) => stage.status === "running");
+    const completed = Object.values(stages).filter((stage) => stage.status === "completed").length;
+    const total = Object.keys(stages).length || 7;
+    onProgress(
+      activeStage
+        ? tx(lang, `Agent 正在执行：${workflowStageLabel(activeStage.stage, lang)} · ${completed}/${total}`, `Agents running: ${workflowStageLabel(activeStage.stage, lang)} · ${completed}/${total}`)
+        : tx(lang, `研究任务状态：${job.status} · ${completed}/${total}`, `Research status: ${job.status} · ${completed}/${total}`),
+    );
+    if (job.status === "completed" && job.result) return job.result;
+    if (job.status === "failed") throw new Error(job.error || tx(lang, "研究任务失败", "Research job failed"));
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+  }
+  throw new Error(tx(lang, "研究任务超过 10 分钟仍未完成，请检查 workflow 状态。", "Research exceeded 10 minutes; inspect workflow status."));
+}
+
 export function Workbench() {
   const [health, setHealth] = useState<Health | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -159,6 +183,7 @@ export function Workbench() {
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [riskLoading, setRiskLoading] = useState(false);
   const [intelligenceLoading, setIntelligenceLoading] = useState(false);
+  const [researchProgress, setResearchProgress] = useState("");
   const [deletingReportIds, setDeletingReportIds] = useState<number[]>([]);
   const [selectedReportIds, setSelectedReportIds] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -167,10 +192,10 @@ export function Workbench() {
     setLoading(true);
     setError(null);
     const [healthResult, modelResult, symbolsResult, runsResult] = await Promise.allSettled([
-      apiGet<Health>("/api/health"),
-      apiGet<{ providers: Provider[] }>("/api/models"),
-      apiGet<{ symbols: SymbolItem[] }>("/api/symbols"),
-      apiGet<{ runs: RunSummary[] }>("/api/research/runs"),
+      apiGet<Health>("/api/health", { timeoutMs: 5000 }),
+      apiGet<{ providers: Provider[] }>("/api/models", { timeoutMs: 5000 }),
+      apiGet<{ symbols: SymbolItem[] }>("/api/symbols", { timeoutMs: 5000 }),
+      apiGet<{ runs: RunSummary[] }>("/api/research/runs", { timeoutMs: 5000 }),
     ]);
 
     if (healthResult.status === "fulfilled") setHealth(healthResult.value);
@@ -188,30 +213,27 @@ export function Workbench() {
     }
     setLoading(false);
 
-    apiGet<NewsResponse>("/api/news?limit=40")
+    apiGet<NewsResponse>("/api/news?limit=40", { timeoutMs: 15000 })
       .then((response) => setOverview((current) => ({ ...current, news: response.items, news_sources: response.sources })))
       .catch(() => undefined);
-    apiGet<StrategyResearch>("/api/strategy/research?limit=6")
+    apiGet<StrategyResearch>("/api/strategy/research?limit=6", { timeoutMs: 20000 })
       .then(setStrategyResearch)
       .catch(() => undefined);
-    apiGet<DailyReads>("/api/research/daily-reads?limit=5")
+    apiGet<DailyReads>("/api/research/daily-reads?limit=5", { timeoutMs: 20000 })
       .then(setDailyReads)
       .catch(() => undefined);
-    apiGet<WorkflowBlueprint>("/api/workflow/blueprint")
+    apiGet<WorkflowBlueprint>("/api/workflow/blueprint", { timeoutMs: 5000 })
       .then(setWorkflowBlueprint)
       .catch(() => undefined);
-    apiGet<FixedIncomeOverview>("/api/fixed-income/overview?limit=10")
+    apiGet<FixedIncomeOverview>("/api/fixed-income/overview?limit=10", { timeoutMs: 20000 })
       .then(setFixedIncome)
       .catch(() => undefined);
-    apiGet<ResearchIntelligence>("/api/intelligence/overview?limit=60")
+    apiGet<ResearchIntelligence>("/api/intelligence/overview?limit=60", { timeoutMs: 5000 })
       .then(setResearchIntelligence)
       .catch(() => undefined);
-    apiGet<Overview>("/api/market/overview")
+    apiGet<Overview>("/api/market/overview", { timeoutMs: 20000 })
       .then((next) => setOverview((current) => ({ ...next, news: current.news.length ? current.news : next.news })))
-      .catch((err) => {
-        setError(`市场概览加载较慢或失败：${err instanceof Error ? err.message : String(err)}`);
-      });
-    void refreshRisk();
+      .catch(() => undefined);
   }
 
   async function refreshRisk(targetSymbol?: string) {
@@ -248,7 +270,6 @@ export function Workbench() {
       void refresh();
     }, 0);
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function runResearch(targetSymbol?: string) {
@@ -256,25 +277,27 @@ export function Workbench() {
     if (!clean) return;
     setSymbol(clean);
     setAnalyzing(true);
+    setResearchProgress(tx(lang, "已提交研究任务，等待 Agent 接管。", "Research queued; waiting for agents."));
     setError(null);
     try {
-      const [researchResponse, profileResponse] = await Promise.all([
-        apiPost<{ report: ResearchReport }>(`/api/research/${clean}`, {
+      const job = await apiPost<ResearchJob>(`/api/research/${clean}/jobs`, {
           provider_id: providerId,
           use_llm: useLlm,
           period,
           language: lang,
-        }),
-        apiGet<SymbolProfile>(`/api/symbols/${clean}?period=${period}`).catch(() => null),
-      ]);
+        }, { timeoutMs: 8000 });
+      const researchResponse = await waitForResearchJob(job.job_id, lang, setResearchProgress);
+      const profileResponse = await apiGet<SymbolProfile>(`/api/symbols/${clean}?period=${period}`, { timeoutMs: 20000 }).catch(() => null);
       setReport(researchResponse.report);
       setRiskAlerts(researchResponse.report.risk_alerts || []);
       setRiskSummary(buildRiskSummary(researchResponse.report.risk_alerts || []));
       setProfile(profileResponse);
       const latestRuns = await apiGet<{ runs: RunSummary[] }>("/api/research/runs").catch(() => null);
       if (latestRuns) setRuns(latestRuns.runs);
+      setResearchProgress(tx(lang, "研报已完成：审计结果和三格式出版状态已返回。", "Research completed with audit and publication status."));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setResearchProgress("");
     } finally {
       setAnalyzing(false);
     }
@@ -286,11 +309,18 @@ export function Workbench() {
     setReport(null);
     setAssistantMessages([]);
     if (!loadProfile) return;
-    const [nextProfile] = await Promise.all([
-      apiGet<SymbolProfile>(`/api/symbols/${clean}?period=${period}`).catch(() => null),
-      refreshRisk(clean),
+    const [nextProfile, latestReport] = await Promise.all([
+      apiGet<SymbolProfile>(`/api/symbols/${clean}?period=${period}`, { timeoutMs: 20000 }).catch(() => null),
+      apiGet<{ content: ResearchReport }>(`/api/research/${clean}`, { timeoutMs: 5000 })
+        .then((response) => response.content)
+        .catch(() => null),
     ]);
     setProfile(nextProfile);
+    setReport(latestReport);
+    if (latestReport) {
+      setRiskAlerts(latestReport.risk_alerts || []);
+      setRiskSummary(buildRiskSummary(latestReport.risk_alerts || []));
+    }
   }
 
   async function runAssistant(question = "") {
@@ -533,6 +563,7 @@ export function Workbench() {
             <ResearchTab
               symbol={symbol}
               setSymbol={setSymbol}
+              loadSymbol={() => void selectSymbol(symbol)}
               period={period}
               setPeriod={setPeriod}
               providers={providers}
@@ -541,6 +572,7 @@ export function Workbench() {
               useLlm={useLlm}
               setUseLlm={setUseLlm}
               analyzing={analyzing}
+              researchProgress={researchProgress}
               runResearch={runResearch}
               runAssistant={runAssistant}
               assistantLoading={assistantLoading}
@@ -2261,6 +2293,7 @@ function StockUniverseTab(props: {
 function ResearchTab(props: {
   symbol: string;
   setSymbol: (value: string) => void;
+  loadSymbol: () => void;
   period: string;
   setPeriod: (value: string) => void;
   providers: Provider[];
@@ -2269,6 +2302,7 @@ function ResearchTab(props: {
   useLlm: boolean;
   setUseLlm: (value: boolean) => void;
   analyzing: boolean;
+  researchProgress: string;
   runResearch: () => void;
   runAssistant: () => void;
   assistantLoading: boolean;
@@ -2284,13 +2318,24 @@ function ResearchTab(props: {
       <Card className="rounded-lg border-white/80 bg-white/84 shadow-[0_14px_38px_rgba(15,23,42,0.07)]">
         <CardContent className="grid items-center gap-3 p-4 md:grid-cols-[1.1fr_0.7fr_1fr_auto_auto]">
           <div className="relative">
-            <Search className="absolute left-3 top-3 h-4 w-4 text-zinc-400" />
             <Input
-              className="h-10 border-slate-200 bg-white/80 pl-9 shadow-inner shadow-slate-950/[0.02]"
+              className="h-10 border-slate-200 bg-white/80 pr-10 shadow-inner shadow-slate-950/[0.02]"
               value={props.symbol}
               onChange={(event) => props.setSymbol(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") props.loadSymbol();
+              }}
               placeholder="AAPL / 600519 / 00700"
             />
+            <button
+              type="button"
+              onClick={props.loadSymbol}
+              aria-label={tx(props.lang, "加载股票", "Load symbol")}
+              title={tx(props.lang, "加载股票", "Load symbol")}
+              className="absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-slate-100 hover:text-teal-700"
+            >
+              <Search className="h-4 w-4" />
+            </button>
           </div>
           <Select value={props.period} onValueChange={props.setPeriod}>
             <SelectTrigger className="h-10 w-full border-slate-200 bg-white/80"><SelectValue placeholder="Period" /></SelectTrigger>
@@ -2325,6 +2370,14 @@ function ResearchTab(props: {
           </Button>
         </CardContent>
       </Card>
+
+      {props.researchProgress ? (
+        <Alert className="border-sky-200 bg-sky-50/80">
+          {props.analyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+          <AlertTitle>{tx(props.lang, "Multi-Agent 研究流水线", "Multi-Agent Research Workflow")}</AlertTitle>
+          <AlertDescription>{props.researchProgress}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <section className="grid items-stretch gap-5 lg:grid-cols-[0.92fr_1.08fr]">
         <div className="grid gap-5">
@@ -2451,6 +2504,16 @@ function EvidenceCoverage({ report, lang }: { report: ResearchReport | null; lan
 }
 
 function ReportDetail({ report, lang }: { report: ResearchReport; lang: Lang }) {
+  const narrativeSections = [
+    [tx(lang, "投资摘要", "Investment Summary"), report.institutional_narrative?.executive_summary],
+    [tx(lang, "公司与基本面", "Company And Fundamentals"), report.institutional_narrative?.company_analysis],
+    [tx(lang, "宏观与行业", "Macro And Industry"), report.institutional_narrative?.macro_analysis],
+    [tx(lang, "估值说明", "Valuation Notes"), report.institutional_narrative?.valuation_analysis],
+    [tx(lang, "价格背景", "Price Context"), report.institutional_narrative?.technical_analysis],
+    [tx(lang, "催化剂", "Catalysts"), report.institutional_narrative?.catalyst_analysis],
+    [tx(lang, "风险提醒", "Risk Notes"), report.institutional_narrative?.risk_analysis],
+    [tx(lang, "证据与缺口", "Evidence And Gaps"), report.institutional_narrative?.evidence_notes],
+  ].filter((item): item is [string, string] => Boolean(item[1]));
   const views = [
     {
       label: tx(lang, "宏观周期", "Macro Cycle"),
@@ -2524,6 +2587,25 @@ function ReportDetail({ report, lang }: { report: ResearchReport; lang: Lang }) 
           <EvidenceGroup title={tx(lang, "宏观与政策", "Macro And Policy")} items={report.research_evidence?.macro || []} lang={lang} />
         </CardContent>
       </Card>
+
+      {narrativeSections.length ? (
+        <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm lg:col-span-4">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <BookOpen className="h-4 w-4" />
+              {tx(lang, "机构研报编辑稿", "Institutional Research Draft")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-x-8 gap-y-5 lg:grid-cols-2">
+            {narrativeSections.map(([title, body]) => (
+              <section key={title} className="border-t border-zinc-200 pt-3">
+                <h3 className="text-sm font-semibold text-zinc-900">{title}</h3>
+                <p className="mt-2 text-sm leading-6 text-zinc-700">{body}</p>
+              </section>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm lg:col-span-4">
         <CardHeader>
@@ -3107,6 +3189,18 @@ function marketLabel(market: string, lang: Lang) {
     hk: tx(lang, "港股", "HK"),
     us: tx(lang, "美股", "US"),
   }[market] || market;
+}
+
+function workflowStageLabel(stage: string, lang: Lang) {
+  return {
+    kline: tx(lang, "K 线采集", "K-line collection"),
+    fundamentals: tx(lang, "基本面研究", "Fundamentals research"),
+    technical: tx(lang, "技术分析", "Technical analysis"),
+    macro: tx(lang, "宏观与政策", "Macro and policy"),
+    report: tx(lang, "研究总监合成", "Director synthesis"),
+    audit: tx(lang, "审计复核", "Publication audit"),
+    publish: tx(lang, "HTML / PDF 出版", "HTML / PDF publication"),
+  }[stage] || stage;
 }
 
 function riskCategoryLabel(category: string, lang: Lang = "zh") {

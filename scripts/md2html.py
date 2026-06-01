@@ -18,9 +18,11 @@ CSS = """
   h4 { font-size: 11pt; color: #666; margin-top: 16px; }
 
   /* ── Tables ── */
-  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; word-break: break-word; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; word-break: normal; }
   th { background: #8B0000; color: white; padding: 6px 10px; text-align: center; vertical-align: middle; }
-  td { border: 1px solid #ddd; padding: 5px 10px; vertical-align: top; }
+  td { border: 1px solid #ddd; padding: 5px 10px; vertical-align: top; overflow-wrap: anywhere; }
+  table:has(th:nth-child(4)) td:nth-child(2),
+  table:has(th:nth-child(4)) td:nth-child(3) { white-space: nowrap; }
   tr:nth-child(even) { background: #f9f9f9; }
   tr:nth-child(odd) { background: #fff; }
   thead th { position: sticky; top: 0; }

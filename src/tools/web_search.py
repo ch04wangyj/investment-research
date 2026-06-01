@@ -1,6 +1,6 @@
 """Web search tool for agents.
 
-Uses DuckDuckGo (free, no API key required) with rate limiting.
+Uses DuckDuckGo's static HTML endpoint with rate limiting.
 Phase 2 can add Tavily/SerpAPI as alternative backends.
 """
 
@@ -8,6 +8,8 @@ import time
 
 from langchain_core.tools import tool
 from loguru import logger
+
+from src.research.source_collector import _search_web
 
 # Rate limit: 1 request per 3 seconds (DuckDuckGo is strict)
 _LAST_SEARCH_TIME = 0.0
@@ -39,16 +41,14 @@ def web_search(query: str) -> str:
     _rate_limit()
 
     try:
-        from duckduckgo_search import DDGS
-
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=5):
-                results.append({
-                    "title": r.get("title", ""),
-                    "snippet": r.get("body", ""),
-                    "url": r.get("href", ""),
-                })
+        results = [
+            {
+                "title": row.get("title", ""),
+                "snippet": row.get("summary", ""),
+                "url": row.get("url", ""),
+            }
+            for row in _search_web(query, max_results=5)
+        ]
 
         if not results:
             return f"No search results found for: {query}"
@@ -62,11 +62,6 @@ def web_search(query: str) -> str:
             )
         return "\n\n".join(formatted)
 
-    except ImportError:
-        return (
-            "Web search is not available (duckduckgo-search package not installed). "
-            "Install it with: pip install duckduckgo-search"
-        )
     except Exception as e:
         logger.error(f"web_search failed: {e}")
         return f"Search failed: {e}. Try a different query."

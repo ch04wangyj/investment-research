@@ -120,6 +120,27 @@ class AshareAkshareProvider(MarketDataProvider):
             return ProviderResult.failure(self.name, str(exc))
 
 
+class EastmoneyAshareProvider(MarketDataProvider):
+    """Direct EastMoney snapshot fallback without importing AKShare."""
+
+    def __init__(self):
+        super().__init__(
+            name="eastmoney_ashare",
+            market="ashare",
+            currency="CNY",
+            timezone_name="Asia/Shanghai",
+        )
+
+    def get_quotes(self, symbols: list[str]) -> ProviderResult:
+        return _eastmoney_quotes(self, symbols)
+
+    def get_historical(self, symbol: str, period: str = "6mo") -> ProviderResult:
+        return ProviderResult.failure(self.name, "EastMoney direct history is not exposed by this adapter")
+
+    def get_fundamentals(self, symbol: str) -> ProviderResult:
+        return _eastmoney_fundamentals(self, symbol)
+
+
 class HkAkshareProvider(MarketDataProvider):
     def __init__(self):
         super().__init__(
@@ -210,6 +231,27 @@ class HkAkshareProvider(MarketDataProvider):
             "industry": None,
         }
         return ProviderResult(source=self.name, payload=payload)
+
+
+class EastmoneyHkProvider(MarketDataProvider):
+    """Direct EastMoney Hong Kong snapshot fallback without importing AKShare."""
+
+    def __init__(self):
+        super().__init__(
+            name="eastmoney_hk",
+            market="hk",
+            currency="HKD",
+            timezone_name="Asia/Hong_Kong",
+        )
+
+    def get_quotes(self, symbols: list[str]) -> ProviderResult:
+        return _eastmoney_quotes(self, symbols)
+
+    def get_historical(self, symbol: str, period: str = "6mo") -> ProviderResult:
+        return ProviderResult.failure(self.name, "EastMoney direct history is not exposed by this adapter")
+
+    def get_fundamentals(self, symbol: str) -> ProviderResult:
+        return _eastmoney_fundamentals(self, symbol)
 
 
 class UsAkshareProvider(MarketDataProvider):
@@ -516,6 +558,98 @@ def _sina_headers() -> dict[str, str]:
         "Referer": "https://finance.sina.com.cn",
         "User-Agent": "Mozilla/5.0",
     }
+
+
+def _eastmoney_quotes(provider: MarketDataProvider, symbols: list[str]) -> ProviderResult:
+    rows = []
+    errors = []
+    for symbol in symbols:
+        try:
+            data = _eastmoney_snapshot(symbol, provider.market)
+            precision = int(data.get("f59") or 2)
+            close = _eastmoney_scaled(data.get("f43"), precision)
+            prev_close = _eastmoney_scaled(data.get("f60"), precision)
+            change_pct = _eastmoney_scaled(data.get("f170"), 2)
+            if change_pct is None and close is not None and prev_close:
+                change_pct = (close / prev_close - 1) * 100
+            rows.append({
+                "symbol": str(data.get("f57") or symbol),
+                "name": _clean(data.get("f58")),
+                "market": provider.market,
+                "currency": provider.currency,
+                "open": _eastmoney_scaled(data.get("f46"), precision),
+                "high": _eastmoney_scaled(data.get("f44"), precision),
+                "low": _eastmoney_scaled(data.get("f45"), precision),
+                "close": close,
+                "prev_close": prev_close,
+                "volume": _num(data.get("f47")),
+                "amount": _num(data.get("f48")),
+                "change_pct": change_pct,
+                "timestamp": utc_now_iso(),
+            })
+        except Exception as exc:
+            errors.append(f"{symbol}: {exc}")
+    if not rows:
+        return ProviderResult.failure(provider.name, "; ".join(errors) or "empty EastMoney quote response")
+    return ProviderResult(source=provider.name, payload=rows)
+
+
+def _eastmoney_fundamentals(provider: MarketDataProvider, symbol: str) -> ProviderResult:
+    try:
+        data = _eastmoney_snapshot(symbol, provider.market)
+        precision = int(data.get("f59") or 2)
+        return ProviderResult(
+            source=provider.name,
+            payload={
+                "symbol": str(data.get("f57") or symbol),
+                "market": provider.market,
+                "currency": provider.currency,
+                "company_name": _clean(data.get("f58")),
+                "current_price": _eastmoney_scaled(data.get("f43"), precision),
+                "pe_ratio": _eastmoney_scaled(data.get("f162"), 2),
+                "pb_ratio": _eastmoney_scaled(data.get("f167"), 2),
+                "market_cap": _num(data.get("f116")),
+                "roe": _num(data.get("f173")),
+            },
+        )
+    except Exception as exc:
+        logger.warning(f"{provider.name}.get_fundamentals({symbol}) failed: {exc}")
+        return ProviderResult.failure(provider.name, str(exc))
+
+
+def _eastmoney_snapshot(symbol: str, market: str) -> dict[str, Any]:
+    import httpx
+
+    response = httpx.get(
+        "https://push2.eastmoney.com/api/qt/stock/get",
+        params={
+            "secid": _eastmoney_security_id(symbol, market),
+            "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f116,f117,f162,f167,f170,f173",
+        },
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=12,
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+    data = response.json().get("data")
+    if not isinstance(data, dict):
+        raise ValueError("empty EastMoney snapshot response")
+    return data
+
+
+def _eastmoney_security_id(symbol: str, market: str) -> str:
+    if market == "hk":
+        return f"116.{symbol.zfill(5)}"
+    normalized = symbol.zfill(6)
+    prefix = "1" if normalized.startswith(("5", "6", "9")) else "0"
+    return f"{prefix}.{normalized}"
+
+
+def _eastmoney_scaled(value: Any, precision: int) -> float | None:
+    number = _num(value)
+    if number is None:
+        return None
+    return number / (10 ** precision)
 
 
 def _ohlcv_records(

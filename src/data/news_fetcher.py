@@ -15,6 +15,12 @@ SINA_ROLL_URL = (
     "?pageid=153&lid=2509&k=&num={max_items}&page=1"
 )
 NEWS_FETCH_TIMEOUT_SECONDS = 12
+COMPANY_NEWS_CHANNELS = {
+    "akshare_stock_news_em",
+    "finnhub_company_news",
+    "yahoo_finance_rss",
+    "google_news_rss",
+}
 
 
 def news_source_catalog() -> list[dict[str, str]]:
@@ -53,8 +59,6 @@ def fetch_financial_news(
         for future in as_completed(futures, timeout=NEWS_FETCH_TIMEOUT_SECONDS):
             try:
                 results.extend(future.result())
-                if len(results) >= max_items:
-                    break
             except Exception as exc:
                 logger.debug(f"news source {futures[future]} failed: {exc}")
     except FuturesTimeoutError:
@@ -169,7 +173,7 @@ def _fetch_finnhub_company_news(symbol: str | None, max_items: int) -> list[dict
     import urllib.request
 
     api_key = get_settings().finnhub_api_key
-    if not api_key:
+    if not api_key or api_key.lower().startswith(("your-", "replace-", "example-")):
         return []
 
     today = datetime.utcnow().date()
@@ -304,6 +308,13 @@ def _dedupe_news(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(key)
         results.append(item)
     return results
+
+
+def is_company_news_item(item: dict[str, Any]) -> bool:
+    """Return whether a normalized item is suitable for single-symbol analysis."""
+
+    channel = str(item.get("source_channel", "")).strip()
+    return not channel or channel in COMPANY_NEWS_CHANNELS
 
 
 def _classify_news(title: str, summary: str = "") -> str:

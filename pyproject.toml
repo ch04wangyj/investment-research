@@ -29,7 +29,6 @@ dependencies = [
     "numpy>=2.0.0",
     "python-dotenv>=1.0.0",
     "curl-cffi>=0.7.0",
-    "duckduckgo-search>=7.0.0",
     "reportlab>=4.5.0",
     "pypdf>=6.0.0",
 ]

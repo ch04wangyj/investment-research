@@ -23,6 +23,12 @@ def _fake_pipeline(symbol, **kwargs):
         valuation=view,
         financial_quality=view,
         sentiment=view,
+        technical=AnalystView(
+            summary="Trend is neutral.",
+            score=55,
+            evidence=["trend: neutral", "rsi_14: 52.0", "sma_20: 98.0"],
+            data_quality="high",
+        ),
         information_summary=InformationSummary(source_count=4),
         research_evidence=ResearchEvidenceBook(
             filings=[
@@ -44,6 +50,8 @@ def _fake_pipeline(symbol, **kwargs):
         ),
         bull_case=["Demand remains resilient."],
         bear_case=["Valuation may compress."],
+        catalysts=["Next earnings update."],
+        risks=["Margin compression remains possible."],
         sources=[DataSource(name="fake", stale=False)],
         archive_history=[
             {
@@ -71,8 +79,8 @@ def test_orchestrator_executes_audits_and_restores_state(tmp_path):
     assert restored.is_complete
     assert restored.stages["audit"].status == StageStatus.COMPLETED
     assert restored.stages["publish"].status == StageStatus.COMPLETED
-    assert (tmp_path / "AAPL" / "fundamentals" / "run-AAPL.pdf").exists()
-    assert list((tmp_path / "AAPL" / "kline" / "daily").glob("*.csv"))
+    assert list((tmp_path / "AAPL_AAPL_Co" / "fundamentals").glob("AAPL_fundamentals_*.pdf"))
+    assert list((tmp_path / "AAPL_AAPL_Co" / "kline" / "daily").glob("*.csv"))
 
     cached = orchestrator.run_single("AAPL", skip_completed=True)
     assert cached.report.run_id == execution.report.run_id
@@ -104,8 +112,10 @@ def test_orchestrator_marks_running_stages_failed(tmp_path):
 
     restored = orchestrator.load_state("AAPL")
     assert restored is not None
-    assert restored.stages["data_collection"].status == StageStatus.FAILED
-    assert restored.stages["deep_research"].status == StageStatus.FAILED
+    assert restored.stages["kline"].status == StageStatus.FAILED
+    assert restored.stages["fundamentals"].status == StageStatus.FAILED
+    assert restored.stages["technical"].status == StageStatus.FAILED
+    assert restored.stages["macro"].status == StageStatus.FAILED
 
 
 def test_orchestrator_blocks_publish_when_audit_is_not_approved(tmp_path):
@@ -117,4 +127,4 @@ def test_orchestrator_blocks_publish_when_audit_is_not_approved(tmp_path):
     execution = orchestrator.run_single("AAPL")
     assert execution.audit.status == "conditional"
     assert execution.workflow.stages["publish"].status == StageStatus.BLOCKED
-    assert not list((tmp_path / "AAPL").rglob("*.pdf"))
+    assert not list((tmp_path / "AAPL_AAPL_Co").rglob("*.pdf"))

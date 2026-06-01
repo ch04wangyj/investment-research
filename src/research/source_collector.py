@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import html
 import re
-from threading import Lock
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 import urllib.request
@@ -19,7 +18,7 @@ import urllib.request
 from loguru import logger
 
 from src.data.cache import get_cache
-from src.data.news_fetcher import fetch_financial_news
+from src.data.news_fetcher import fetch_financial_news, is_company_news_item
 from src.research.schemas import EvidenceItem, ResearchEvidenceBook
 
 
@@ -61,11 +60,6 @@ MEDIA_DOMAINS = (
     "cnstock.com",
     "cs.com.cn",
 )
-_DDGS_LOCK = Lock()
-_DDGS_CLS: Any | None = None
-_DDGS_IMPORT_ERROR: str | None = None
-
-
 def collect_research_evidence(
     symbol: str,
     market: str,
@@ -204,23 +198,14 @@ def build_research_queries(
 
 
 def _search_web(query: str, max_results: int) -> list[dict[str, str]]:
-    ddgs_cls = _get_ddgs_cls()
-    if ddgs_cls is None:
-        return []
+    """Search public metadata without loading an optional native HTTP client.
 
-    try:
-        results: list[dict[str, str]] = []
-        with ddgs_cls(timeout=8) as ddgs:
-            for row in ddgs.text(query, max_results=max_results):
-                results.append({
-                    "title": str(row.get("title", "")),
-                    "summary": str(row.get("body", "")),
-                    "url": str(row.get("href", "")),
-                })
-        return results
-    except Exception as exc:
-        logger.debug(f"Research search fallback for {query}: {exc}")
-        return _search_duckduckgo_html(query, max_results)
+    duckduckgo-search imports curl_cffi. Some Windows Python environments fail
+    while loading its native DLL, which can terminate a background refresh
+    thread before Python can catch the error. The static endpoint is slower but
+    deterministic and sufficient for evidence discovery.
+    """
+    return _search_duckduckgo_html(query, max_results)
 
 
 def _search_duckduckgo_html(query: str, max_results: int) -> list[dict[str, str]]:
@@ -278,28 +263,6 @@ def _strip_html(value: str) -> str:
     return html.unescape(without_tags).strip()
 
 
-def _get_ddgs_cls():
-    global _DDGS_CLS, _DDGS_IMPORT_ERROR
-    if _DDGS_CLS is not None:
-        return _DDGS_CLS
-    if _DDGS_IMPORT_ERROR is not None:
-        return None
-    with _DDGS_LOCK:
-        if _DDGS_CLS is not None:
-            return _DDGS_CLS
-        if _DDGS_IMPORT_ERROR is not None:
-            return None
-        try:
-            from duckduckgo_search import DDGS
-
-            _DDGS_CLS = DDGS
-            return _DDGS_CLS
-        except Exception as exc:
-            _DDGS_IMPORT_ERROR = str(exc)
-            logger.warning(f"duckduckgo-search unavailable: {_DDGS_IMPORT_ERROR}")
-            return None
-
-
 def _collect_news(symbol: str, max_items: int) -> list[EvidenceItem]:
     try:
         rows = fetch_financial_news(symbol=symbol, max_items=max_items)
@@ -307,6 +270,8 @@ def _collect_news(symbol: str, max_items: int) -> list[EvidenceItem]:
         rows = []
     items = []
     for row in rows:
+        if not is_company_news_item(row):
+            continue
         title = str(row.get("title", "")).strip()
         if not title:
             continue

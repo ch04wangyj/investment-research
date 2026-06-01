@@ -54,9 +54,14 @@ def workflow_blueprint() -> dict[str, Any]:
                 "latency_strategy": "低温度、短上下文的反方审查，减少深度模型调用次数。",
             },
             {
+                "stage": "Institutional Report Editor",
+                "goal": "读取结构化事实、多空辩论和风险队列，补全机构研报章节叙事，并保留证据边界。",
+                "latency_strategy": "后台 job 执行深度模型；失败时回退到确定性章节，不阻塞归档和审计。",
+            },
+            {
                 "stage": "Research Director",
                 "goal": "按机构研报形态输出评级、关键假设、催化剂、风险和非投资建议声明。",
-                "latency_strategy": "先输出结构化报告，再按需生成 PDF 和长文本。",
+                "latency_strategy": "先输出结构化报告，审计批准后统一生成 MD、HTML 和 PDF。",
             },
             {
                 "stage": "Deterministic Publication Gate",
@@ -68,6 +73,6 @@ def workflow_blueprint() -> dict[str, Any]:
             "每日优质研报抓取进入资料目录，作为开盘前阅读和个股研报的证据来源。",
             "报告历史支持删除，避免本地实验报告污染评级统计。",
             "后续技术策略模块与研报模块分离，防止交易信号压过基本面研究。",
-            "引入异步 run 状态和局部刷新，减少长链 pipeline 对前端响应的阻塞。",
+            "网页通过后台 job 和阶段轮询运行完整流水线，长链分析不阻塞交互。",
         ],
     }

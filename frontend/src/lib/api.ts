@@ -162,6 +162,16 @@ export type ResearchReport = {
     validation_checks: string[];
     confidence_adjustments: string[];
   };
+  institutional_narrative?: {
+    executive_summary: string;
+    company_analysis: string;
+    macro_analysis: string;
+    valuation_analysis: string;
+    technical_analysis: string;
+    catalyst_analysis: string;
+    risk_analysis: string;
+    evidence_notes: string;
+  };
   publication_audit?: PublicationAudit | null;
   bull_case: string[];
   bear_case: string[];
@@ -472,18 +482,59 @@ export type ResearchIntelligence = {
   learning_protocol: string[];
 };
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+export type WorkflowStageResult = {
+  stage: string;
+  status: "pending" | "running" | "completed" | "failed" | "blocked" | "skipped";
+  error?: string | null;
+};
+
+export type ResearchJob = {
+  job_id: string;
+  symbol: string;
+  status: "queued" | "running" | "completed" | "failed";
+  workflow?: {
+    stages?: Record<string, WorkflowStageResult>;
+    audit_status?: string | null;
+  } | null;
+  result?: {
+    report: ResearchReport;
+    audit: PublicationAudit;
+    workflow: unknown;
+  } | null;
+  error?: string | null;
+};
+
+type ApiOptions = {
+  timeoutMs?: number;
+};
+
+async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`请求超时（${Math.round(timeoutMs / 1000)}s）`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+export async function apiGet<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const response = await fetchWithTimeout(`${API_BASE}${path}`, { cache: "no-store" }, options.timeoutMs);
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
   return response.json();
 }
 
-export async function apiDelete<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+export async function apiDelete<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const response = await fetchWithTimeout(`${API_BASE}${path}`, {
     method: "DELETE",
-  });
+  }, options.timeoutMs);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
@@ -491,12 +542,12 @@ export async function apiDelete<T>(path: string): Promise<T> {
   return response.json();
 }
 
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+export async function apiPost<T>(path: string, body: unknown, options: ApiOptions = {}): Promise<T> {
+  const response = await fetchWithTimeout(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, options.timeoutMs);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `${response.status} ${response.statusText}`);
