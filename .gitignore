@@ -18,6 +18,13 @@ data/sqlite/*.db
 data/chroma/
 data/cache/
 data/parquet/
+data/research_runs/
+data/kline/
+data/fundamentals/
+data/macro/
+data/technical/
+data/reports/
+data/audit/
 
 # IDE
 .vscode/

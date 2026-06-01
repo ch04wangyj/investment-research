@@ -93,6 +93,25 @@ export type RiskSummary = {
   highest: string;
 };
 
+export type AuditFinding = {
+  code: string;
+  severity: "info" | "warning" | "critical";
+  category: string;
+  title: string;
+  detail: string;
+  remediation: string;
+};
+
+export type PublicationAudit = {
+  status: "approved" | "conditional" | "blocked";
+  score: number;
+  generated_at: string;
+  reviewer: string;
+  findings: AuditFinding[];
+  checks: string[];
+  disclaimer: string;
+};
+
 export type ResearchReport = {
   run_id: string;
   symbol: string;
@@ -136,6 +155,7 @@ export type ResearchReport = {
     validation_checks: string[];
     confidence_adjustments: string[];
   };
+  publication_audit?: PublicationAudit | null;
   bull_case: string[];
   bear_case: string[];
   catalysts: string[];

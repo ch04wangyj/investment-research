@@ -28,6 +28,7 @@ import {
   Search,
   Settings2,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Trash2,
   Zap,
@@ -1569,6 +1570,7 @@ function ReportSummary({ report, lang }: { report: ResearchReport | null; lang: 
           <MiniMetric label={tx(lang, "证据", "Evidence")} value={evidenceTotal(report)} />
           <MiniMetric label={tx(lang, "置信度", "Confidence")} value={confidenceLabel(report.confidence, lang)} />
           <MiniMetric label={tx(lang, "风险提醒", "Risk Alerts")} value={(report.risk_alerts || []).filter((item) => item.severity !== "info").length} />
+          <MiniMetric label={tx(lang, "出版质检", "Publication Gate")} value={auditStatusLabel(report.publication_audit?.status, lang)} />
         </div>
         {(report.risk_alerts || []).some((item) => item.severity !== "info") ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">
@@ -1702,6 +1704,47 @@ function ReportDetail({ report, lang }: { report: ResearchReport; lang: Lang }) 
             <InfoList title={tx(lang, "防单向幻觉", "Anti Hallucination")} items={report.pipeline_diagnostics?.hallucination_controls || []} lang={lang} />
             <InfoList title={tx(lang, "置信度调整", "Confidence Adjustments")} items={report.pipeline_diagnostics?.confidence_adjustments || []} tone="warning" lang={lang} />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="h-full rounded-lg border-white/80 bg-white shadow-sm lg:col-span-4">
+        <CardHeader>
+          <CardTitle className="flex flex-wrap items-center justify-between gap-3 text-base">
+            <span className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              {tx(lang, "出版质量门", "Publication Gate")}
+            </span>
+            <Badge className={`rounded-md ${auditStatusClass(report.publication_audit?.status)}`}>
+              {auditStatusLabel(report.publication_audit?.status, lang)}
+              {report.publication_audit ? ` · ${Math.round(report.publication_audit.score)}/100` : ""}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+          <div className="space-y-2">
+            {(report.publication_audit?.findings?.length
+              ? report.publication_audit.findings
+              : [{
+                  code: "pending",
+                  severity: "info" as const,
+                  category: "audit",
+                  title: tx(lang, "未发现自动出版阻断项", "No automated publication blockers found"),
+                  detail: tx(lang, "质量门仍不替代逐条人工事实核验。", "The gate still does not replace claim-level human verification."),
+                  remediation: "",
+                }]
+            ).slice(0, 6).map((item) => (
+              <div key={item.code} className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2">
+                <p className="text-sm font-medium text-zinc-800">{item.title}</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-600">{item.detail}</p>
+                {item.remediation ? <p className="mt-1 text-xs leading-5 text-amber-800">{item.remediation}</p> : null}
+              </div>
+            ))}
+          </div>
+          <InfoList
+            title={tx(lang, "自动检查范围", "Automated Checks")}
+            items={report.publication_audit?.checks || [tx(lang, "旧报告未记录出版质量门结果。", "Legacy report has no publication gate record.")]}
+            lang={lang}
+          />
         </CardContent>
       </Card>
 
@@ -2154,6 +2197,22 @@ function RiskSeverityBadge({ severity, lang }: { severity: string; lang: Lang })
     info: tx(lang, "提示", "Info"),
   }[severity] || severity;
   return <Badge className={`rounded-md ${style}`}>{label}</Badge>;
+}
+
+function auditStatusLabel(status: "approved" | "conditional" | "blocked" | null | undefined, lang: Lang) {
+  return {
+    approved: tx(lang, "通过", "Approved"),
+    conditional: tx(lang, "有条件通过", "Conditional"),
+    blocked: tx(lang, "阻断出版", "Blocked"),
+  }[String(status)] || tx(lang, "待质检", "Pending");
+}
+
+function auditStatusClass(status?: string | null) {
+  return {
+    approved: "bg-emerald-100 text-emerald-800 hover:bg-emerald-100",
+    conditional: "bg-amber-100 text-amber-800 hover:bg-amber-100",
+    blocked: "bg-red-100 text-red-800 hover:bg-red-100",
+  }[String(status)] || "bg-slate-100 text-slate-700 hover:bg-slate-100";
 }
 
 function comparisonInsights(items: SymbolCompareItem[], lang: Lang) {

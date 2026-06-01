@@ -22,14 +22,15 @@ def main():
     parser.add_argument("--save-db", action="store_true", help="Save report to SQLite")
     args = parser.parse_args()
 
-    from src.agents.research.graph import run_research_pipeline
+    from src.orchestrator.pipeline import PipelineOrchestrator
 
-    report = run_research_pipeline(
+    execution = PipelineOrchestrator().run_single(
         args.ticker,
         period=args.period,
         provider_id=args.provider,
         use_llm=args.use_llm,
     )
+    report = execution.report
     # Handle Windows GBK console encoding
     json_output = report.model_dump_json(indent=2)
     try:
@@ -45,7 +46,7 @@ def main():
         repo = AgentReportRepository(get_settings().operational_db_path)
         repo.create_tables()
         repo.save({
-            "agent_name": "ResearchDirector",
+            "agent_name": "ResearchDirectorAudited",
             "run_id": report.run_id,
             "ticker": report.symbol,
             "report_type": "institutional_research",

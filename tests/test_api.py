@@ -45,6 +45,8 @@ def test_run_research_endpoint_with_mock_pipeline(monkeypatch):
     response = client.post("/api/research/AAPL", json={"use_llm": False})
     assert response.status_code == 200
     assert response.json()["report"]["symbol"] == "AAPL"
+    assert response.json()["audit"]["status"] == "blocked"
+    assert response.json()["workflow"]["stages"]["audit"]["status"] == "completed"
 
 
 def test_pdf_endpoint_returns_pdf(monkeypatch):
@@ -120,6 +122,38 @@ def test_workflow_blueprint_endpoint():
     assert response.status_code == 200
     data = response.json()
     assert {item["framework"] for item in data["comparisons"]} >= {"TradingAgents", "FinRobot", "OpenBB"}
+    assert len(data["registered_agents"]) == 6
+
+
+def test_workflow_agents_endpoint():
+    client = TestClient(app)
+    response = client.get("/api/workflow/agents")
+    assert response.status_code == 200
+    assert {item["id"] for item in response.json()["agents"]} >= {
+        "kline-collector",
+        "fundamentals-researcher",
+        "macro-researcher",
+        "technical-analyst",
+        "report-writer",
+        "research-auditor",
+    }
+
+
+def test_workflow_run_endpoint(monkeypatch):
+    class FakeState:
+        def to_dict(self):
+            return {"symbol": "AAPL", "audit_status": "conditional"}
+
+    class FakeOrchestrator:
+        def load_state(self, symbol):
+            return FakeState() if symbol == "AAPL" else None
+
+    monkeypatch.setattr("src.api.main._research_orchestrator", lambda: FakeOrchestrator())
+    client = TestClient(app)
+    response = client.get("/api/workflow/runs/AAPL")
+    assert response.status_code == 200
+    assert response.json()["workflow"]["audit_status"] == "conditional"
+    assert client.get("/api/workflow/runs/MSFT").status_code == 404
 
 
 def test_delete_research_run_endpoint(monkeypatch):

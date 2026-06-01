@@ -16,6 +16,8 @@ from src.core.llm import provider_catalog
 from src.data.dal import detect_market, get_dal, normalize_symbol
 from src.data.indices import fetch_all_indices
 from src.data.news_fetcher import fetch_financial_news
+from src.orchestrator.pipeline import PipelineOrchestrator
+from src.orchestrator.roles import research_agent_catalog
 from src.research.schemas import ResearchRequest
 from src.research.daily_reads import collect_daily_reads
 from src.research.strategy_research import collect_strategy_research
@@ -26,7 +28,7 @@ from src.storage.repository import AgentReportRepository, TrackedSymbolRepositor
 
 app = FastAPI(
     title="AI Investment Research API",
-    version="0.2.0",
+    version="0.3.0",
     description="Local-first API for multi-market AI investment research.",
 )
 
@@ -79,6 +81,10 @@ def _report_repo() -> AgentReportRepository:
     repo = AgentReportRepository(_db_path())
     repo.create_tables()
     return repo
+
+
+def _research_orchestrator() -> PipelineOrchestrator:
+    return PipelineOrchestrator(pipeline=run_research_pipeline)
 
 
 @app.get("/api/health")
@@ -147,6 +153,20 @@ def strategy_research(limit: int = 6) -> dict[str, Any]:
 @app.get("/api/workflow/blueprint")
 def workflow_design_blueprint() -> dict[str, Any]:
     return workflow_blueprint()
+
+
+@app.get("/api/workflow/agents")
+def workflow_agents() -> dict[str, Any]:
+    return {"agents": research_agent_catalog()}
+
+
+@app.get("/api/workflow/runs/{symbol}")
+def workflow_run(symbol: str) -> dict[str, Any]:
+    normalized = normalize_symbol(symbol)
+    state = _research_orchestrator().load_state(normalized)
+    if not state:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    return {"workflow": state.to_dict()}
 
 
 @app.get("/api/risk/alerts")
@@ -317,24 +337,29 @@ def research_pdf(symbol: str, lang: str = "zh") -> Response:
 def run_research(symbol: str, request: ResearchRequest | None = None) -> dict[str, Any]:
     request = request or ResearchRequest()
     normalized = normalize_symbol(symbol)
-    report = run_research_pipeline(
+    execution = _research_orchestrator().run_single(
         normalized,
         period=request.period,
         provider_id=request.provider_id,
         use_llm=request.use_llm,
         language=request.language,
     )
+    report = execution.report
     content = report.model_dump(mode="json")
     repo = _report_repo()
     repo.save({
-        "agent_name": "ResearchDirector",
+        "agent_name": "ResearchDirectorAudited",
         "run_id": report.run_id,
         "ticker": report.symbol,
         "report_type": "institutional_research",
         "content": content,
         "trigger_type": "manual",
     })
-    return {"report": content}
+    return {
+        "report": content,
+        "audit": execution.audit.model_dump(mode="json"),
+        "workflow": execution.workflow.to_dict(),
+    }
 
 
 @app.post("/api/assistant/{symbol}")
@@ -345,16 +370,17 @@ def assistant_analysis(symbol: str, request: AssistantRequest | None = None) -> 
     if latest:
         content = latest[0].content or {}
     else:
-        report = run_research_pipeline(
+        execution = _research_orchestrator().run_single(
             normalized,
             period=request.period,
             provider_id=request.provider_id,
             use_llm=request.use_llm,
             language="en" if request.language == "en" else "zh",
         )
+        report = execution.report
         content = report.model_dump(mode="json")
         _report_repo().save({
-            "agent_name": "AgentAssistant",
+            "agent_name": "AgentAssistantAudited",
             "run_id": report.run_id,
             "ticker": report.symbol,
             "report_type": "assistant_research",

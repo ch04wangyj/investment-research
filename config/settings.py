@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     parquet_dir: Path = Field(default=Path("./data/parquet"))
     cache_dir: Path = Field(default=Path("./data/cache"))
 
+    # Audited runtime artifacts. Override STOCK_RESEARCH_ROOT when a separate
+    # research archive is preferred.
+    stock_research_root: Path = Field(default=Path("./data/research_runs"))
+
     # LLM providers
     default_llm_provider: str = "deepseek"
     enable_deepseek_thinking: bool = False
@@ -134,8 +138,7 @@ class Settings(BaseSettings):
 
     def model_post_init(self, _ctx):
         # Ensure data directories exist
-        for d in [self.sqlite_dir, self.chroma_dir, self.parquet_dir, self.cache_dir]:
-            d = self.data_dir / d if not d.is_absolute() else d
+        for d in [self.data_dir, self.sqlite_dir, self.chroma_dir, self.parquet_dir, self.cache_dir, self.stock_research_root]:
             d.mkdir(parents=True, exist_ok=True)
 
     @property

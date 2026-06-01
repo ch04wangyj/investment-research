@@ -16,6 +16,8 @@ EvidenceChannel = Literal[
 ]
 EvidenceQuality = Literal["primary", "institutional", "media", "search", "unknown"]
 AlertSeverity = Literal["info", "watch", "warning", "critical"]
+AuditSeverity = Literal["info", "warning", "critical"]
+PublicationStatus = Literal["approved", "conditional", "blocked"]
 RiskCategory = Literal[
     "drawdown",
     "policy_event",
@@ -117,6 +119,29 @@ class PipelineDiagnostics(BaseModel):
     confidence_adjustments: list[str] = Field(default_factory=list)
 
 
+class AuditFinding(BaseModel):
+    code: str
+    severity: AuditSeverity
+    category: str
+    title: str
+    detail: str
+    remediation: str = ""
+
+
+class PublicationAudit(BaseModel):
+    status: PublicationStatus
+    score: float = Field(ge=0, le=100)
+    generated_at: datetime = Field(default_factory=datetime.now)
+    reviewer: str = "DeterministicPublicationGate"
+    findings: list[AuditFinding] = Field(default_factory=list)
+    checks: list[str] = Field(default_factory=list)
+    disclaimer: str = (
+        "This automated publication gate checks report structure, source coverage, "
+        "data freshness, and opposing-case completeness. It does not replace "
+        "claim-level human verification."
+    )
+
+
 class ResearchReport(BaseModel):
     run_id: str
     symbol: str
@@ -153,6 +178,7 @@ class ResearchReport(BaseModel):
     trading_strategy: TradingStrategy | None = None
     risk_alerts: list[RiskAlert] = Field(default_factory=list)
     pipeline_diagnostics: PipelineDiagnostics = Field(default_factory=PipelineDiagnostics)
+    publication_audit: PublicationAudit | None = None
     bull_case: list[str] = Field(default_factory=list)
     bear_case: list[str] = Field(default_factory=list)
     catalysts: list[str] = Field(default_factory=list)

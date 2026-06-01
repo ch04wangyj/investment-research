@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from src.orchestrator.roles import research_agent_catalog
+
 
 def workflow_blueprint() -> dict[str, Any]:
     """Return the current architecture comparison and planned workflow upgrades."""
@@ -14,6 +16,7 @@ def workflow_blueprint() -> dict[str, Any]:
             "本项目不再追求同花顺式资讯终端，而是围绕快速信息收集、证据校验、"
             "公司基本面和宏观约束生成机构研报。交易策略作为独立后续模块进入。"
         ),
+        "registered_agents": research_agent_catalog(),
         "comparisons": [
             {
                 "framework": "TradingAgents",
@@ -54,6 +57,11 @@ def workflow_blueprint() -> dict[str, Any]:
                 "stage": "Research Director",
                 "goal": "按机构研报形态输出评级、关键假设、催化剂、风险和非投资建议声明。",
                 "latency_strategy": "先输出结构化报告，再按需生成 PDF 和长文本。",
+            },
+            {
+                "stage": "Deterministic Publication Gate",
+                "goal": "检查行情锚、证据覆盖、数据新鲜度、数据缺口以及多空论点完整性；不把自动检查包装成人工事实核验。",
+                "latency_strategy": "只读取已生成结构化报告，不追加网络请求，低延迟输出 approved / conditional / blocked。",
             },
         ],
         "next_actions": [

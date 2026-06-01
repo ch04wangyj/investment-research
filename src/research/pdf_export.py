@@ -121,6 +121,7 @@ def _cover(report: dict[str, Any], styles: dict[str, ParagraphStyle], lang: str)
         [_txt(lang, "置信度", "Confidence"), report.get("confidence", "-")],
         [_txt(lang, "当前价格", "Current price"), _fmt(report.get("current_price"))],
         [_txt(lang, "6个月目标价", "6M target"), _fmt(report.get("price_target_6m"))],
+        [_txt(lang, "出版质量门", "Publication gate"), (report.get("publication_audit", {}) or {}).get("status", "pending")],
     ]
     return [
         Paragraph(_safe(title), styles["title"]),
@@ -187,11 +188,30 @@ def _evidence_sections(report: dict[str, Any], styles: dict[str, ParagraphStyle]
 
 
 def _risk_sections(report: dict[str, Any], styles: dict[str, ParagraphStyle], lang: str) -> list[Any]:
+    audit = report.get("publication_audit", {}) or {}
+    findings = audit.get("findings", []) or []
     story = [
         Paragraph(_txt(lang, "催化剂", "Catalysts"), styles["h2"]),
         *_bullets(report.get("catalysts", [])[:8], styles),
         Paragraph(_txt(lang, "主要风险", "Key Risks"), styles["h2"]),
         *_bullets(report.get("risks", [])[:10], styles),
+        Paragraph(_txt(lang, "出版质量门", "Publication Gate"), styles["h2"]),
+        Paragraph(
+            _safe(
+                _txt(lang, "自动审计状态", "Automated audit status")
+                + f": {audit.get('status', 'pending')} | "
+                + _txt(lang, "评分", "Score")
+                + f": {audit.get('score', '-')}"
+            ),
+            styles["body"],
+        ),
+        *_bullets(
+            [
+                f"[{item.get('severity', 'info')}] {item.get('title', '')}: {item.get('detail', '')}"
+                for item in findings[:8]
+            ],
+            styles,
+        ),
     ]
     return story
 
