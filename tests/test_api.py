@@ -101,6 +101,32 @@ def test_strategy_research_endpoint(monkeypatch):
     assert response.json()["principles"] == ["research first"]
 
 
+def test_fixed_income_framework_endpoint():
+    client = TestClient(app)
+    response = client.get("/api/fixed-income/framework")
+    assert response.status_code == 200
+    assert len(response.json()["framework_sections"]) == 6
+
+
+def test_fixed_income_overview_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        "src.api.main.build_fixed_income_dashboard",
+        lambda max_products_per_category=8: {
+            "generated_at": "2026-01-01T00:00:00",
+            "framework_sections": [],
+            "agents": [],
+            "market_snapshot": {"yield_curve": [], "curve_signals": [], "liquidity": [], "source_status": []},
+            "allocation_profiles": [],
+            "product_categories": [],
+            "products": [{"id": "money:1"}],
+        },
+    )
+    client = TestClient(app)
+    response = client.get("/api/fixed-income/overview?limit=2")
+    assert response.status_code == 200
+    assert response.json()["products"][0]["id"] == "money:1"
+
+
 def test_daily_reads_endpoint(monkeypatch):
     monkeypatch.setattr(
         "src.api.main.collect_daily_reads",

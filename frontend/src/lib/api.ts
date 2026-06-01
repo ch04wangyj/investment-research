@@ -330,6 +330,98 @@ export type WorkflowBlueprint = {
   next_actions: string[];
 };
 
+export type FixedIncomeSignal = {
+  name: string;
+  value?: number | null;
+  unit: string;
+  as_of: string;
+};
+
+export type FixedIncomeCurvePoint = {
+  tenor: string;
+  treasury_yield?: number | null;
+  aaa_note_yield?: number | null;
+  credit_spread_bp?: number | null;
+  as_of: string;
+};
+
+export type FixedIncomeFrameworkSection = {
+  id: string;
+  title: string;
+  question: string;
+  signals: string[];
+  agent: string;
+  interpretation: string;
+};
+
+export type FixedIncomeAgent = {
+  id: string;
+  name: string;
+  mission: string;
+  output: string;
+  guardrail: string;
+};
+
+export type FixedIncomeProfile = {
+  id: string;
+  title: string;
+  risk_level: string;
+  equity_cap_pct: number;
+  drawdown_guardrail_pct: number;
+  focus: string;
+};
+
+export type FixedIncomeProductCategory = {
+  id: string;
+  title: string;
+  risk_level: string;
+  liquidity: string;
+  focus: string;
+  warning: string;
+};
+
+export type FixedIncomeProduct = {
+  id: string;
+  code: string;
+  name: string;
+  category: string;
+  category_title: string;
+  risk_level: string;
+  rank?: number | null;
+  as_of?: string;
+  nav?: number | null;
+  daily_return_pct?: number | null;
+  return_1m_pct?: number | null;
+  return_6m_pct?: number | null;
+  return_1y_pct?: number | null;
+  ytd_return_pct?: number | null;
+  income_per_10k?: number | null;
+  annualized_7d_pct?: number | null;
+  annualized_14d_pct?: number | null;
+  fee?: string;
+  source: string;
+  note: string;
+};
+
+export type FixedIncomeOverview = {
+  generated_at: string;
+  positioning: string;
+  reference: { title: string; local_reference: boolean; usage: string };
+  framework_sections: FixedIncomeFrameworkSection[];
+  agents: FixedIncomeAgent[];
+  research_protocol: string[];
+  allocation_profiles: FixedIncomeProfile[];
+  product_categories: FixedIncomeProductCategory[];
+  market_snapshot: {
+    yield_curve: FixedIncomeCurvePoint[];
+    curve_signals: FixedIncomeSignal[];
+    liquidity: FixedIncomeSignal[];
+    source_status: ApiMeta[];
+  };
+  products: FixedIncomeProduct[];
+  disclaimer: string;
+};
+
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!response.ok) {

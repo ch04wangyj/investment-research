@@ -20,6 +20,7 @@ from src.orchestrator.pipeline import PipelineOrchestrator
 from src.orchestrator.roles import research_agent_catalog
 from src.research.schemas import ResearchRequest
 from src.research.daily_reads import collect_daily_reads
+from src.research.fixed_income import build_fixed_income_dashboard, fixed_income_framework
 from src.research.strategy_research import collect_strategy_research
 from src.research.workflow_blueprint import workflow_blueprint
 from src.research.pdf_export import render_research_pdf
@@ -150,6 +151,16 @@ def news(symbol: str | None = None, limit: int = 30) -> dict[str, Any]:
 @app.get("/api/strategy/research")
 def strategy_research(limit: int = 6) -> dict[str, Any]:
     return collect_strategy_research(max_items_per_section=max(1, min(limit, 12)))
+
+
+@app.get("/api/fixed-income/framework")
+def fixed_income_research_framework() -> dict[str, Any]:
+    return fixed_income_framework()
+
+
+@app.get("/api/fixed-income/overview")
+def fixed_income_overview(limit: int = 8) -> dict[str, Any]:
+    return build_fixed_income_dashboard(max_products_per_category=max(1, min(limit, 20)))
 
 
 @app.get("/api/workflow/blueprint")

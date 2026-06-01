@@ -19,6 +19,7 @@ import {
   FileText,
   FolderOpen,
   Gauge,
+  Landmark,
   Layers3,
   Languages,
   Loader2,
@@ -31,6 +32,7 @@ import {
   ShieldCheck,
   Sparkles,
   Trash2,
+  WalletCards,
   Zap,
 } from "lucide-react";
 
@@ -51,6 +53,7 @@ import {
   type DailyReads,
   type Provider,
   type EvidenceItem,
+  type FixedIncomeOverview,
   type NewsSource,
   type Quote,
   type RatingSummary,
@@ -143,6 +146,7 @@ export function Workbench() {
   const [strategyResearch, setStrategyResearch] = useState<StrategyResearch | null>(null);
   const [dailyReads, setDailyReads] = useState<DailyReads | null>(null);
   const [workflowBlueprint, setWorkflowBlueprint] = useState<WorkflowBlueprint | null>(null);
+  const [fixedIncome, setFixedIncome] = useState<FixedIncomeOverview | null>(null);
   const [comparison, setComparison] = useState<SymbolComparison | null>(null);
   const [report, setReport] = useState<ResearchReport | null>(null);
   const [profile, setProfile] = useState<SymbolProfile | null>(null);
@@ -192,6 +196,9 @@ export function Workbench() {
       .catch(() => undefined);
     apiGet<WorkflowBlueprint>("/api/workflow/blueprint")
       .then(setWorkflowBlueprint)
+      .catch(() => undefined);
+    apiGet<FixedIncomeOverview>("/api/fixed-income/overview?limit=10")
+      .then(setFixedIncome)
       .catch(() => undefined);
     apiGet<Overview>("/api/market/overview")
       .then((next) => setOverview((current) => ({ ...next, news: current.news.length ? current.news : next.news })))
@@ -489,10 +496,11 @@ export function Workbench() {
         <GuideStrip lang={lang} />
 
         <Tabs defaultValue="research" className="space-y-5">
-          <TabsList className="mx-auto grid h-auto w-full grid-cols-2 rounded-lg p-1 md:w-[1120px] md:grid-cols-7">
+          <TabsList className="mx-auto grid h-auto w-full grid-cols-2 rounded-lg p-1 md:grid-cols-4 lg:w-[1240px] lg:grid-cols-8">
             <TabsTrigger value="research">{tx(lang, "研报工作台", "Research")}</TabsTrigger>
             <TabsTrigger value="evidence">{tx(lang, "资料目录", "Evidence")}</TabsTrigger>
             <TabsTrigger value="strategy">{tx(lang, "策略方法", "Methods")}</TabsTrigger>
+            <TabsTrigger value="fixed-income">{tx(lang, "固收理财", "Fixed Income")}</TabsTrigger>
             <TabsTrigger value="compare">{tx(lang, "股票对比", "Compare")}</TabsTrigger>
             <TabsTrigger value="universe">{tx(lang, "股票池", "Universe")}</TabsTrigger>
             <TabsTrigger value="risk">{tx(lang, "风险提醒", "Risk")}</TabsTrigger>
@@ -533,6 +541,10 @@ export function Workbench() {
               onRefresh={refresh}
               loading={loading}
             />
+          </TabsContent>
+
+          <TabsContent value="fixed-income" className="space-y-5">
+            <FixedIncomeTab overview={fixedIncome} lang={lang} onRefresh={refresh} loading={loading} />
           </TabsContent>
 
           <TabsContent value="compare" className="space-y-5">
@@ -1158,6 +1170,312 @@ function EvidenceGroup({ title, items, lang }: { title: string; items: EvidenceI
         </div>
       ) : null}
     </div>
+  );
+}
+
+function FixedIncomeTab({
+  overview,
+  lang,
+  onRefresh,
+  loading,
+}: {
+  overview: FixedIncomeOverview | null;
+  lang: Lang;
+  onRefresh: () => void;
+  loading: boolean;
+}) {
+  const [frameworkQuery, setFrameworkQuery] = useState("");
+  const [expandedFramework, setExpandedFramework] = useState<string | null>("macro_cycle");
+  const [showAgents, setShowAgents] = useState(false);
+  const [productQuery, setProductQuery] = useState("");
+  const [productCategory, setProductCategory] = useState("all");
+  const [expandedProduct, setExpandedProduct] = useState<string | null>(null);
+
+  if (!overview) {
+    return (
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardContent className="flex min-h-48 items-center justify-center text-sm text-zinc-500">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          {tx(lang, "正在加载固收曲线、资金面和产品目录…", "Loading curves, liquidity, and product directory…")}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const frameworkSections = overview.framework_sections.filter((section) => {
+    const query = frameworkQuery.trim().toLowerCase();
+    return !query || `${section.title} ${section.question} ${section.signals.join(" ")} ${section.interpretation}`.toLowerCase().includes(query);
+  });
+  const categoryMap = new Map(overview.product_categories.map((item) => [item.id, item]));
+  const products = overview.products.filter((item) => {
+    const query = productQuery.trim().toLowerCase();
+    const matchesCategory = productCategory === "all" || item.category === productCategory;
+    const matchesQuery = !query || `${item.code} ${item.name} ${item.category_title} ${item.source}`.toLowerCase().includes(query);
+    return matchesCategory && matchesQuery;
+  });
+
+  return (
+    <section className="space-y-5">
+      <Card className="overflow-hidden rounded-lg border-white/80 bg-white shadow-sm">
+        <CardContent className="grid gap-5 p-5 lg:grid-cols-[1.1fr_0.9fr] lg:p-6">
+          <div>
+            <Badge className="rounded-md bg-teal-700 text-white hover:bg-teal-700">
+              <Landmark className="mr-1.5 h-3.5 w-3.5" />
+              {tx(lang, "固收研究框架", "Fixed Income Research")}
+            </Badge>
+            <h2 className="mt-3 text-xl font-semibold tracking-tight text-zinc-950">
+              {tx(lang, "先看周期与资金，再看曲线与产品", "Start with cycle and liquidity, then curve and products")}
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-600">{overview.positioning}</p>
+            <p className="mt-3 text-xs leading-5 text-zinc-500">
+              {tx(lang, "框架参考", "Framework reference")}: {overview.reference.title} · {overview.reference.usage}
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
+                {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                {tx(lang, "刷新固收数据", "Refresh Fixed Income")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setShowAgents((current) => !current)}>
+                <Bot className="mr-2 h-4 w-4" />
+                {showAgents ? tx(lang, "收起 Agent", "Hide Agents") : tx(lang, "查看 Agent 分工", "View Agent Roles")}
+              </Button>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {overview.market_snapshot.curve_signals.map((item) => (
+              <div key={item.name} className="rounded-lg border border-sky-100 bg-sky-50/70 px-3 py-3">
+                <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-sky-700">{item.name}</p>
+                <p className="mt-2 text-xl font-semibold text-sky-950">{formatFixedIncomeValue(item.value, item.unit)}</p>
+                <p className="mt-1 text-[11px] text-sky-700">{item.as_of || "-"}</p>
+              </div>
+            ))}
+            {!overview.market_snapshot.curve_signals.length ? (
+              <div className="col-span-full flex min-h-28 items-center justify-center rounded-lg border border-dashed text-xs text-zinc-500">
+                {tx(lang, "收益率曲线暂未返回，框架仍可使用。", "Curve data is unavailable; the framework remains usable.")}
+              </div>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
+
+      {showAgents ? (
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Brain className="h-4 w-4" />
+              {tx(lang, "固收研究 Agent：拆解、交叉验证、复核", "Fixed-income agents: decompose, cross-check, audit")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {overview.agents.map((agent) => (
+              <div key={agent.id} className="rounded-lg border bg-zinc-50 p-4">
+                <p className="text-sm font-semibold text-zinc-950">{agent.name}</p>
+                <p className="mt-2 text-xs leading-5 text-zinc-600">{agent.mission}</p>
+                <p className="mt-3 rounded-md bg-white px-3 py-2 text-xs leading-5 text-zinc-600">
+                  <span className="font-medium text-zinc-900">{tx(lang, "复核", "Guardrail")}:</span> {agent.guardrail}
+                </p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <section className="grid items-start gap-5 lg:grid-cols-[1.25fr_0.75fr]">
+        <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Activity className="h-4 w-4" />
+              {tx(lang, "收益率曲线与信用利差", "Yield Curve And Credit Spread")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table className="min-w-[560px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{tx(lang, "期限", "Tenor")}</TableHead>
+                    <TableHead>{tx(lang, "国债", "Treasury")}</TableHead>
+                    <TableHead>{tx(lang, "AAA 中票", "AAA Note")}</TableHead>
+                    <TableHead>{tx(lang, "信用利差", "Credit Spread")}</TableHead>
+                    <TableHead>{tx(lang, "数据日期", "As Of")}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {overview.market_snapshot.yield_curve.map((item) => (
+                    <TableRow key={item.tenor}>
+                      <TableCell className="font-medium">{item.tenor}</TableCell>
+                      <TableCell>{formatFixedIncomeValue(item.treasury_yield, "%")}</TableCell>
+                      <TableCell>{formatFixedIncomeValue(item.aaa_note_yield, "%")}</TableCell>
+                      <TableCell>{formatFixedIncomeValue(item.credit_spread_bp, "bp")}</TableCell>
+                      <TableCell className="text-xs text-zinc-500">{item.as_of || "-"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="space-y-5">
+          <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Gauge className="h-4 w-4" />
+                {tx(lang, "银行间资金面", "Interbank Liquidity")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              {overview.market_snapshot.liquidity.map((item) => (
+                <MiniMetric key={item.name} label={`${item.name} · ${item.as_of || "-"}`} value={formatFixedIncomeValue(item.value, item.unit)} />
+              ))}
+            </CardContent>
+          </Card>
+          <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+            <CardHeader><CardTitle className="text-base">{tx(lang, "数据源状态", "Source Status")}</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              {overview.market_snapshot.source_status.map((item) => (
+                <div key={item.source} className="flex items-start justify-between gap-3 rounded-md border bg-zinc-50 px-3 py-2">
+                  <span className="text-xs leading-5 text-zinc-700">{item.source}</span>
+                  <Badge variant="secondary" className={item.error ? "rounded-md bg-amber-100 text-amber-800" : "rounded-md bg-emerald-100 text-emerald-800"}>
+                    {item.error ? tx(lang, "降级", "Degraded") : item.stale ? tx(lang, "缓存", "Cached") : tx(lang, "在线", "Live")}
+                  </Badge>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex flex-wrap items-center justify-between gap-3 text-base">
+            <span className="flex items-center gap-2">
+              <Layers3 className="h-4 w-4" />
+              {tx(lang, "六段式分析框架", "Six-part Research Framework")}
+            </span>
+            <label className="relative w-full sm:w-72">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <Input value={frameworkQuery} onChange={(event) => setFrameworkQuery(event.target.value)} placeholder={tx(lang, "搜索维度或指标", "Search dimensions or signals")} className="h-9 bg-white pl-9" />
+            </label>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2">
+          {frameworkSections.map((section) => {
+            const open = expandedFramework === section.id;
+            return (
+              <div key={section.id} className="rounded-lg border bg-zinc-50">
+                <button type="button" onClick={() => setExpandedFramework(open ? null : section.id)} className="flex w-full items-start justify-between gap-3 p-4 text-left">
+                  <span>
+                    <span className="block text-sm font-semibold text-zinc-950">{section.title}</span>
+                    <span className="mt-1 block text-xs leading-5 text-zinc-600">{section.question}</span>
+                  </span>
+                  {open ? <ChevronUp className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" /> : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />}
+                </button>
+                {open ? (
+                  <div className="border-t px-4 py-3">
+                    <div className="flex flex-wrap gap-2">
+                      {section.signals.map((signal) => <Badge key={signal} variant="secondary" className="rounded-md">{signal}</Badge>)}
+                    </div>
+                    <p className="mt-3 text-xs leading-5 text-zinc-600">{section.interpretation}</p>
+                    <p className="mt-2 text-[11px] text-zinc-500">Agent: {section.agent}</p>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="h-4 w-4" />
+            {tx(lang, "风险预算模板", "Risk Budget Profiles")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {overview.allocation_profiles.map((profile) => (
+            <div key={profile.id} className="rounded-lg border bg-zinc-50 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold">{profile.title}</p>
+                <Badge variant="secondary" className="rounded-md">{profile.risk_level}</Badge>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <MiniMetric label={tx(lang, "权益上限", "Equity Cap")} value={`${profile.equity_cap_pct}%`} />
+                <MiniMetric label={tx(lang, "回撤护栏", "Drawdown Guard")} value={`${profile.drawdown_guardrail_pct}%`} />
+              </div>
+              <p className="mt-3 text-xs leading-5 text-zinc-600">{profile.focus}</p>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-lg border-white/80 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <WalletCards className="h-4 w-4" />
+            {tx(lang, "基金与理财产品目录", "Fund And Wealth Product Directory")}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs leading-5 text-zinc-500">
+            {tx(lang, "目录用于初筛，不构成产品推荐。先看风险预算，再看底层持仓和最新披露；排行榜只能负责敲门。", "Directory for screening only, not recommendations. Start with risk budget, then verify holdings and current disclosures. Rankings only open the door.")}
+          </p>
+          <div className="grid gap-2 md:grid-cols-[1fr_220px_auto]">
+            <label className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <Input value={productQuery} onChange={(event) => setProductQuery(event.target.value)} placeholder={tx(lang, "搜索基金代码、名称、来源", "Search code, name, or source")} className="h-9 bg-white pl-9" />
+            </label>
+            <Select value={productCategory} onValueChange={setProductCategory}>
+              <SelectTrigger className="h-9 bg-white"><SelectValue placeholder={tx(lang, "全部产品", "All Products")} /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{tx(lang, "全部产品", "All Products")}</SelectItem>
+                {overview.product_categories.map((item) => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Badge variant="secondary" className="w-fit rounded-md">{products.length}/{overview.products.length}</Badge>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {overview.product_categories.map((item) => (
+              <button key={item.id} type="button" onClick={() => setProductCategory(item.id)} className="rounded-md border bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 transition hover:border-zinc-400 hover:bg-white">
+                {item.title} · {item.risk_level}
+              </button>
+            ))}
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {products.map((item) => {
+              const open = expandedProduct === item.id;
+              const category = categoryMap.get(item.category);
+              return (
+                <div key={item.id} className="rounded-lg border bg-zinc-50 transition hover:border-zinc-400 hover:bg-white">
+                  <button type="button" onClick={() => setExpandedProduct(open ? null : item.id)} className="flex w-full items-start justify-between gap-3 p-4 text-left">
+                    <span>
+                      <span className="block text-sm font-semibold text-zinc-950">{item.name}</span>
+                      <span className="mt-1 block font-mono text-xs text-zinc-500">{item.code} · {item.category_title} · {tx(lang, "风险", "Risk")} {item.risk_level}</span>
+                    </span>
+                    {open ? <ChevronUp className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" /> : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />}
+                  </button>
+                  {open ? (
+                    <div className="border-t px-4 py-3">
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        <MiniMetric label={item.category === "money_market" ? tx(lang, "7 日年化", "7D Annualized") : tx(lang, "近 1 年", "1Y Return")} value={formatFixedIncomeValue(item.category === "money_market" ? item.annualized_7d_pct : item.return_1y_pct, "%")} />
+                        <MiniMetric label={tx(lang, "近 1 月", "1M Return")} value={formatFixedIncomeValue(item.return_1m_pct, "%")} />
+                        <MiniMetric label={tx(lang, "数据日期", "As Of")} value={item.as_of || "-"} />
+                      </div>
+                      <p className="mt-3 text-xs leading-5 text-zinc-600">{item.note}</p>
+                      {category ? <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">{category.warning}</p> : null}
+                      <p className="mt-2 text-[11px] text-zinc-500">{item.source}</p>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+            {!products.length ? <DirectoryEmpty lang={lang} /> : null}
+          </div>
+          <p className="text-xs leading-5 text-zinc-500">{overview.disclaimer}</p>
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
@@ -2631,6 +2949,12 @@ function formatPercent(value: unknown) {
   if (number == null) return "-";
   const pct = Math.abs(number) <= 10 ? number * 100 : number;
   return `${pct.toFixed(1)}%`;
+}
+
+function formatFixedIncomeValue(value: unknown, unit: string) {
+  const number = toNumber(value);
+  if (number == null) return "-";
+  return `${number.toFixed(2)}${unit}`;
 }
 
 function confidenceLabel(value: string, lang: Lang) {
